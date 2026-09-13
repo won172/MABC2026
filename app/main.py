@@ -8,7 +8,14 @@ from typing import Optional
 import sqlite3
 import os
 import uuid
+import json
+import re
+import requests
 from datetime import datetime
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI(
     title="청년주택 적격성 워크스페이스",
@@ -19,14 +26,14 @@ app = FastAPI(
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # 정적 파일 마운트
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
 # 템플릿 설정
 templates = Jinja2Templates(directory="templates")
@@ -110,9 +117,56 @@ def init_db():
             FOREIGN KEY (result_id) REFERENCES eligibility_results(id)
         )
     """)
-    
+
+    # 대화형 판정 세션
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            notice_id TEXT NOT NULL,
+            notice_content TEXT NOT NULL,
+            result_label TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES user_profiles(id),
+            FOREIGN KEY (notice_id) REFERENCES notices(id)
+        )
+    """)
+
+    # 대화형 판정 메시지 (질문/답변/중간 상태)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            meta TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
+        )
+    """)
+
     conn.commit()
     conn.close()
+
+
+# 온보딩 단계 제목/설명
+step_titles = {
+    1: "기본 정보 입력",
+    2: "무주택 여부 확인",
+    3: "혼인 여부 확인",
+    4: "소득·자산 정보 입력",
+    5: "입력 내용 확인",
+}
+
+step_descriptions = {
+    1: "생년월일, 거주 지역, 거주 기간을 입력해요.",
+    2: "세대 구성원 무주택 여부를 확인해요.",
+    3: "혼인 여부를 확인해요.",
+    4: "월평균 소득, 총자산, 자동차 가액을 입력해요.",
+    5: "지금까지 입력한 내용을 확인하고 완료해요.",
+}
+
 
 # 앱 시작 시 DB 초기화
 @app.on_event("startup")
@@ -156,6 +210,34 @@ class RequirementDetailCreate(BaseModel):
     user_info: Optional[str] = None
     result: str  # met, not_met, needs_review, unverified
     notes: Optional[str] = None
+
+
+class ChatSessionCreate(BaseModel):
+    notice_content: str
+    dob: Optional[str] = None
+    region: Optional[str] = None
+    residence_duration: Optional[str] = None
+    housing_status: Optional[str] = None
+    marital_status: Optional[str] = None
+    income_info: Optional[str] = None
+    asset_info: Optional[str] = None
+    car_value: Optional[str] = None
+
+
+class ChatMessageCreate(BaseModel):
+    session_id: str
+    content: str
+
+
+class ChatResponse(BaseModel):
+    session_id: str
+    role: str
+    content: str
+    is_final: bool
+    result: Optional[str] = None
+    summary: Optional[str] = None
+    details: Optional[list] = None
+    notice_id: Optional[str] = None
 
 # 단계별 메타데이터 (index 뷰와 onboarding_step 뷰에서 공통 사용)
 STEP_TITLES = {
@@ -211,11 +293,23 @@ async def index(request: Request):
             "notices": []
         })
 
+    profile = {
+        "dob": row["dob"] if row else "",
+        "region": row["region"] if row else "",
+        "residence_duration": row["residence_duration"] if row else "",
+        "housing_status": row["housing_status"] if row else "",
+        "marital_status": row["marital_status"] if row else "",
+        "income_info": row["income_info"] if row else "",
+        "asset_info": row["asset_info"] if row else "",
+        "car_value": row["car_value"] if row else "",
+        "notify_eligible": bool(row["notify_eligible"]) if row else False,
+    }
+
     response = templates.TemplateResponse("onboarding.html", {
         "request": request,
         "current_step": row["onboarding_step"] if row else 1,
         "user_id": user_id,
-        "profile": dict(row) if row else {},
+        "profile": profile,
         "step_title": step_titles.get(row["onboarding_step"] if row else 1, ""),
         "step_description": step_descriptions.get(row["onboarding_step"] if row else 1, ""),
         "housing_status_label": housing_status_label,
@@ -253,7 +347,7 @@ async def onboarding_step(request: Request, step: int):
             "request": request,
             "current_step": step,
             "user_id": user_id,
-            "profile": dict(row) if row else {},
+            "row": row,
             "step_title": STEP_TITLES.get(step, ""),
             "step_description": STEP_DESCRIPTIONS.get(step, ""),
             "housing_status_label": housing_status_label,
@@ -469,6 +563,694 @@ async def get_user_eligibility(request: Request, notice_id: str):
     
     conn.close()
     return {"result": None}
+
+
+# === 스킬 로드 ===
+SKILL_PATH = os.environ.get(
+    "SKILL_PATH",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "skills", "SKILL.md"),
+)
+
+def _load_skill_md() -> str:
+    """스킬 파일을 읽는다. 없으면 판정 불가 오류로 처리한다."""
+    if not os.path.isfile(SKILL_PATH):
+        raise RuntimeError(f"스킬 파일을 찾을 수 없습니다: {SKILL_PATH}")
+    with open(SKILL_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+SOLAR_API_KEY = os.environ.get("SOLAR_API_KEY", "").strip()
+SOLAR_BASE_URL = os.environ.get("SOLAR_BASE_URL", "https://api.upstage.ai").strip()
+SOLAR_MODEL = os.environ.get("SOLAR_MODEL", "solar-pro4").strip()
+
+AS_USER = "user"
+AS_SYSTEM = "system"
+
+def _parse_eligibility_result(raw: str) -> dict:
+    """Solar 응답 텍스트에서 🟢/🔴/🟡 최종 판정과 한 줄 요약, 조건 대조, 근거를 추출한다.
+
+    고정 응답은 쓰지 않는다. Solar가 생성한 텍스트만 파싱하며, 형태가 불명확하면
+    확보 가능한 범위까지만 반환하고 나머지는 null로 남긴다.
+    """
+    text = raw or ""
+    result = None
+    summary = None
+    details = []
+
+    # 최종 판정 토큰 탐색
+    if "🟢" in text or "신청 가능" in text:
+        result = "eligible"
+    elif "🔴" in text or "신청 불가" in text:
+        result = "ineligible"
+    elif "🟡" in text or "추가 확인 필요" in text or "확인 필요" in text:
+        result = "needs_review"
+
+    # 한 줄 요약: "한 줄 요약" 또는 "한 문장" 뒤 첫 문장-ish
+    # 정규식 없이 단순 구간 추출로 충분하다. 없으면 None.
+    for marker in ["한 줄 요약", "한 문장", "한줄 요약"]:
+        if marker in text:
+            start = text.find(marker)
+            snippet = text[start:]
+            # 다음 섹션 헤더 이전까지
+            end = 10000
+            for next_marker in ["자격조건 대조", "판단 근거", "신청 전 확인할 것", "최종 판정"]:
+                idx = snippet.find(next_marker)
+                if idx != -1 and idx < end:
+                    end = idx
+            candidate = snippet[len(marker):end].strip()
+            if candidate:
+                # 앞뒤 개행 정리
+                summary = candidate.split("\n")[0].strip()
+            break
+
+    # 조건 대조 테이블-ish: 표 형태는 그대로 보존하기 어려우므로,
+    # 라인으로 분리한 뒤 "조건 | 공고 기준 | 내 조건 | 판정" 패턴을 찾는다.
+    lines = text.splitlines()
+    table_started = False
+    for line in lines:
+        stripped = line.strip()
+        if "자격조건 대조" in stripped or "조건" in stripped and "공고 기준" in stripped:
+            table_started = True
+            continue
+        if table_started:
+            # 표 헤더/구분선 건너뛰기
+            if stripped.startswith("|") and "---" not in stripped and "조건" not in stripped:
+                cells = [c.strip() for c in stripped.split("|")]
+                # markdown 표는 양끝에 빈 셀이 붙으므로 필터
+                cells = [c for c in cells if c != ""]
+                if len(cells) >= 2:
+                    name = cells[0]
+                    criteria = cells[1] if len(cells) > 1 else ""
+                    user_info = cells[2] if len(cells) > 2 else ""
+                    verdict = cells[3] if len(cells) > 3 else ""
+                    # 판정 토큰 정규화
+                    if "⭕" in verdict or "충족" in verdict:
+                        vr = "met"
+                    elif "❌" in verdict or "미충족" in verdict:
+                        vr = "not_met"
+                    elif "⚠️" in verdict or "확인 필요" in verdict:
+                        vr = "needs_review"
+                    else:
+                        vr = "unverified"
+                    details.append({
+                        "requirement_name": name,
+                        "notice_criteria": criteria,
+                        "user_info": user_info,
+                        "result": vr,
+                        "notes": "",
+                    })
+            # 표가 끝나면 중단 (다음 대제목 또는 빈 줄 연속)
+            if stripped and not stripped.startswith("|"):
+                # 표 뒤 첫 의미 있는 라인에서 중단
+                if any(m in stripped for m in ["판단 근거", "신청 전 확인할 것", "최종 판정", "기준시점"]):
+                    break
+                # 빈 줄이 아니고 표 시작도 아니면 중단 처리
+                if not stripped.startswith("|"):
+                    break
+
+    return {
+        "result": result,
+        "summary": summary,
+        "details": details,
+        "raw": text,
+    }
+
+
+def build_check_prompt(notice_content: str, user_profile: dict, history=None) -> str:
+    """Solar에 보낼 판정 프롬프트를 구성한다.
+
+    스킬 파일(skills/SKILL.md)을 읽어 프롬프트 최상단에 포함한다.
+    코드는 스킬 파일을 재가공하거나 규칙을 중복하지 않고, 그대로 전달만 한다.
+    공고 텍스트 + 프로필 + (옵션) 이전 대화 맥락을 넣는다.
+    공고에 없는 조건을 외부에서 가져오지 않고, 최종 판단은 시행기관 심사로 결정된다는 점은
+    스킬 파일에 이미 명시되어 있으므로 프롬프트에서 중복하지 않는다.
+    """
+    skill_md = _load_skill_md()
+
+    profile_lines = []
+    for key, label in [
+        ("dob", "생년월일"),
+        ("region", "현재 거주 지역"),
+        ("residence_duration", "거주 기간"),
+        ("housing_status", "무주택 여부"),
+        ("marital_status", "혼인 여부"),
+        ("income_info", "소득 정보"),
+        ("asset_info", "자산 정보"),
+        ("car_value", "자동차 가액"),
+    ]:
+        v = user_profile.get(key)
+        if v:
+            profile_lines.append(f"- {label}: {v}")
+        else:
+            profile_lines.append(f"- {label}: (미제공)")
+
+    profile_block = "\n".join(profile_lines)
+
+    history_block = ""
+    if history:
+        lines = []
+        for h in history:
+            role = h.get("role") or "user"
+            content = h.get("content") or ""
+            if role == "user":
+                lines.append(f"사용자: {content}")
+            else:
+                lines.append(f"AI 어시스턴트: {content}")
+        history_block = "\n\n## 이전 대화\n" + "\n".join(lines)
+
+    prompt = f"""## 사용할 스킬 (youth-housing-eligibility-checker)
+아래 스킬 파일의 모든 규칙과 출력 형식을 그대로 따라 판정하세요. 코드에서 전달해준 스킬 원문입니다.
+
+{skill_md}
+
+## 공고 내용
+{notice_content}
+
+## 사용자 프로필
+{profile_block}
+{history_block}
+
+## 수행 지시
+위 공고 하나를 읽고, 스킬 파일에 명시된 단계(0~10)와 출력 형식을 그대로 따라 신청 가능 여부를 판정하세요.
+
+- 지금이 질문 단계이면, 질문과 답변 요청만 간결하게 출력하세요. 다른 설명은 최소화하세요.
+- 지금이 최종 판정 단계이면 스킬 파일의 9단계 출력 형식을 그대로 따르세요.
+- 스킬 파일에 명시된 원칙·규칙·출력 형식을 우선하며, 위 지시와 스킬 파일이 충돌하면 스킬 파일을 따르세요.
+"""
+
+    return prompt.strip()
+
+
+def call_solar(prompt: str) -> str:
+    """Solar Pro4에 채팅을 보내고 응답 텍스트를 반환한다.
+
+    고정 응답은 쓰지 않는다. 실제 호출이 실패하거나 키가 없으면 예외를 올린다(호출부가 처리).
+    """
+    if not SOLAR_API_KEY:
+        raise RuntimeError("SOLAR_API_KEY not configured")
+
+    payload = {
+        "model": SOLAR_MODEL,
+        "messages": [
+            {"role": AS_USER, "content": prompt},
+        ],
+        "max_tokens": 4096,
+        "temperature": 0.2,
+    }
+    headers = {
+        "Authorization": f"Bearer {SOLAR_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    resp = requests.post(
+        f"{SOLAR_BASE_URL}/v1/chat/completions",
+        headers=headers,
+        json=payload,
+        timeout=60,
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    choices = body.get("choices") or []
+    if not choices:
+        raise RuntimeError("Solar returned no choices")
+    return (choices[0].get("message") or {}).get("content") or ""
+
+
+def is_final_judgment(text: str) -> bool:
+    """Solar 응답이 최종 판정인지(질문 단계가 아닌지) 판별한다.
+
+    🟢/🔴/🟡 최종 판정 토큰 + 한 줄 요약/자격조건 대조/판단 근거/신청 전 확인할 것 중
+    하나라도 있으면 최종 판정으로 본다. 질문만 있으면 False.
+    """
+    if not text:
+        return False
+    has_judgment_token = "🟢" in text or "🔴" in text or "🟡" in text
+    markers = ["한 줄 요약", "한 문장", "한줄 요약", "자격조건 대조", "판단 근거", "신청 전 확인할 것"]
+    has_structure = any(m in text for m in markers)
+    return bool(has_judgment_token and has_structure)
+
+
+def extract_question(text: str):
+    """Solar 응답이 질문 단계면 질문 내용을 추출해 반환한다.
+
+    없으면 None.
+    """
+    if not text:
+        return None
+    text = text.strip()
+    # 최종 판정 표지 있으면 질문 아님
+    if is_final_judgment(text):
+        return None
+    # 첫 줄을 질문 문장으로 간주
+    first = text.splitlines()[0].strip()
+    if not first:
+        return None
+    # "사용자" 접두가 붙은 경우 정리
+    first = re.sub(r"^사용자:\s*", "", first)
+    first = re.sub(r"^AI 어시스턴트:\s*", "", first)
+    if len(first) < 3:
+        return None
+    return first
+
+
+@app.post("/api/chat/session")
+async def create_chat_session(request: Request, data: ChatSessionCreate):
+    """공고 텍스트 + 사용자 프로필로 대화형 판정 세션을 시작한다.
+
+    - 고정 응답은 사용하지 않는다. Solar 응답을 파싱해 질문 또는 최종 판정을 만든다.
+    - Solar 키가 없으면 503으로 반환한다.
+    - 세션과 첫 메시지를 저장하고, 질문이면 is_final=False, 최종 판정이면 is_final=True와 함께 결과/상세도 반환한다.
+    """
+    user_id = request.cookies.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="사용자 세션이 없습니다")
+
+    notice_text = (data.notice_content or "").strip()
+    if not notice_text:
+        raise HTTPException(status_code=400, detail="공고 내용이 필요합니다")
+
+    user_profile = {
+        "dob": data.dob,
+        "region": data.region,
+        "residence_duration": data.residence_duration,
+        "housing_status": data.housing_status,
+        "marital_status": data.marital_status,
+        "income_info": data.income_info,
+        "asset_info": data.asset_info,
+        "car_value": data.car_value,
+    }
+
+    try:
+        prompt = build_check_prompt(notice_text, user_profile)
+        raw = call_solar(prompt)
+    except RuntimeError as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "detail": str(exc)},
+        )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "detail": f"Solar 호출 실패: {exc}"},
+        )
+
+    parsed = _parse_eligibility_result(raw)
+    final = is_final_judgment(raw)
+    question_text = extract_question(raw) if not final else None
+
+    if final:
+        role = "assistant"
+        content = raw
+    else:
+        role = "assistant"
+        content = question_text or raw
+
+    session_id = str(uuid.uuid4())
+    notice_id = str(uuid.uuid5(uuid.NAMESPACE_OID, notice_text[:500]))
+    now = datetime.now().isoformat()
+    message_id = str(uuid.uuid4())
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id FROM notices WHERE id = ?", (notice_id,))
+    if cursor.fetchone() is None:
+        cursor.execute(
+            """INSERT INTO notices
+               (id, title, agency, notice_type, region, publish_date,
+                apply_start, apply_end, status, raw_content, created_at, updated_at)
+               VALUES (?, '공고 판정', '', '', '', '', '', '', 'published', ?, ?, ?)""",
+            (notice_id, notice_text, now, now),
+        )
+
+    cursor.execute(
+        """INSERT INTO chat_sessions
+           (id, user_id, notice_id, notice_content, result_label, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (session_id, user_id, notice_id, notice_text,
+         parsed.get("result") if final else None, now, now),
+    )
+
+    cursor.execute(
+        """INSERT INTO chat_messages
+           (id, session_id, role, content, meta, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (message_id, session_id, role, content, "", now),
+    )
+
+    conn.commit()
+    conn.close()
+
+    response: dict = {
+        "session_id": session_id,
+        "role": role,
+        "content": content,
+        "is_final": final,
+    }
+
+    if final:
+        result_label = parsed.get("result") or "needs_review"
+        summary_text = parsed.get("summary")
+        details = parsed.get("details") or []
+
+        result_id = str(uuid.uuid4())
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO eligibility_results
+               (id, user_id, notice_id, result, summary, counts_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (result_id, user_id, notice_id, result_label,
+             summary_text,
+             json.dumps({"detail_count": len(details)}, ensure_ascii=False),
+             now),
+        )
+        for d in details:
+            cursor.execute(
+                """INSERT INTO requirement_details
+                   (id, result_id, requirement_name, requirement_type,
+                    notice_criteria, user_info, result, notes)
+                   VALUES (?, ?, ?, 'mandatory', ?, ?, ?, ?)""",
+                (
+                    str(uuid.uuid4()),
+                    result_id,
+                    d.get("requirement_name"),
+                    d.get("notice_criteria"),
+                    d.get("user_info"),
+                    d.get("result"),
+                    d.get("notes"),
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+        response["result"] = result_label
+        response["summary"] = summary_text
+        response["details"] = details
+        response["notice_id"] = notice_id
+
+    return response
+
+
+@app.post("/api/chat/message")
+async def send_chat_message(request: Request, data: ChatMessageCreate):
+    """세션에 답변을 보내고 다음 질문 또는 최종 판정을 받는다.
+
+    - Solar 키가 없으면 503으로 반환한다.
+    - 저장된 메시지 히스토리를 함께 프롬프트에 넣어 이어서 판정한다.
+    - 최종 판정이 나오면 eligibility_results/requirement_details에 저장하고 결과를 반환한다.
+    """
+    user_id = request.cookies.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="사용자 세션이 없습니다")
+
+    session_id = data.session_id
+    if not session_id:
+        raise HTTPException(status_code=400, detail="세션 ID가 필요합니다")
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM chat_sessions WHERE id = ?", (session_id,))
+    session_row = cursor.fetchone()
+    if not session_row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+
+    if session_row["user_id"] != user_id:
+        conn.close()
+        raise HTTPException(status_code=403, detail="이 세션에 접근할 수 없습니다")
+
+    notice_text = session_row["notice_content"]
+    now = datetime.now().isoformat()
+
+    cursor.execute(
+        """SELECT role, content FROM chat_messages
+           WHERE session_id = ?
+           ORDER BY created_at ASC""",
+        (session_id,),
+    )
+    history_rows = cursor.fetchall()
+    history = [{"role": r["role"], "content": r["content"]} for r in history_rows]
+
+    cursor.execute(
+        """SELECT dob, region, residence_duration, housing_status, marital_status,
+                  income_info, asset_info, car_value
+           FROM user_profiles WHERE id = ?""",
+        (user_id,),
+    )
+    profile_row = cursor.fetchone()
+    if profile_row:
+        user_profile = dict(profile_row)
+    else:
+        user_profile = {}
+
+    history.append({"role": "user", "content": data.content})
+
+    try:
+        prompt = build_check_prompt(notice_text, user_profile, history=history)
+        raw = call_solar(prompt)
+    except RuntimeError as exc:
+        conn.close()
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "detail": str(exc)},
+        )
+    except Exception as exc:
+        conn.close()
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "detail": f"Solar 호출 실패: {exc}"},
+        )
+
+    parsed = _parse_eligibility_result(raw)
+    final = is_final_judgment(raw)
+    question_text = extract_question(raw) if not final else None
+
+    if final:
+        role = "assistant"
+        content = raw
+    else:
+        role = "assistant"
+        content = question_text or raw
+
+    message_id = str(uuid.uuid4())
+    cursor.execute(
+        """INSERT INTO chat_messages
+           (id, session_id, role, content, meta, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (message_id, session_id, role, content, "", now),
+    )
+
+    if final:
+        result_label = parsed.get("result") or "needs_review"
+        summary_text = parsed.get("summary")
+        details = parsed.get("details") or []
+
+        cursor.execute(
+            """UPDATE chat_sessions
+               SET result_label = ?, updated_at = ?
+               WHERE id = ?""",
+            (result_label, now, session_id),
+        )
+
+        result_id = str(uuid.uuid4())
+        cursor.execute(
+            """INSERT INTO eligibility_results
+               (id, user_id, notice_id, result, summary, counts_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (result_id, user_id, session_row["notice_id"], result_label,
+             summary_text,
+             json.dumps({"detail_count": len(details)}, ensure_ascii=False),
+             now),
+        )
+        for d in details:
+            cursor.execute(
+                """INSERT INTO requirement_details
+                   (id, result_id, requirement_name, requirement_type,
+                    notice_criteria, user_info, result, notes)
+                   VALUES (?, ?, ?, 'mandatory', ?, ?, ?, ?)""",
+                (
+                    str(uuid.uuid4()),
+                    result_id,
+                    d.get("requirement_name"),
+                    d.get("notice_criteria"),
+                    d.get("user_info"),
+                    d.get("result"),
+                    d.get("notes"),
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+        return {
+            "session_id": session_id,
+            "role": role,
+            "content": content,
+            "is_final": True,
+            "result": result_label,
+            "summary": summary_text,
+            "details": details,
+            "notice_id": session_row["notice_id"],
+        }
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "session_id": session_id,
+        "role": role,
+        "content": content,
+        "is_final": False,
+    }
+
+
+@app.get("/api/chat/session/{session_id}")
+async def get_chat_session(request: Request, session_id: str):
+    """세션의 메시지 히스토리와 현재 상태를 조회한다."""
+    user_id = request.cookies.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="사용자 세션이 없습니다")
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM chat_sessions WHERE id = ?", (session_id,))
+    session_row = cursor.fetchone()
+    if not session_row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+
+    if session_row["user_id"] != user_id:
+        conn.close()
+        raise HTTPException(status_code=403, detail="이 세션에 접근할 수 없습니다")
+
+    cursor.execute(
+        """SELECT role, content, created_at FROM chat_messages
+           WHERE session_id = ?
+           ORDER BY created_at ASC""",
+        (session_id,),
+    )
+    messages = [dict(r) for r in cursor.fetchall()]
+
+    conn.close()
+
+    return {
+        "session_id": session_id,
+        "notice_id": session_row["notice_id"],
+        "result_label": session_row["result_label"],
+        "messages": messages,
+    }
+
+
+@app.post("/api/eligibility/check")
+async def check_eligibility(request: Request, data: dict):
+    """공고 텍스트 + 사용자 프로필을 받아 Solar Pro4로 판정하고 결과를 저장·반환한다.
+
+    - 고정 응답은 사용하지 않는다. Solar 응답을 파싱해 결과를 만든다.
+    - Solar 키가 없으면 503으로 반환한다(프론트가 키 미설정 상태를 안내할 수 있도록).
+    - 저장: eligibility_results + requirement_details.
+    """
+    user_id = request.cookies.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="사용자 세션이 없습니다")
+
+    notice_text = (data.get("notice_content") or "").strip()
+    if not notice_text:
+        raise HTTPException(status_code=400, detail="공고 내용이 필요합니다")
+
+    user_profile = {
+        "dob": data.get("dob"),
+        "region": data.get("region"),
+        "residence_duration": data.get("residence_duration"),
+        "housing_status": data.get("housing_status"),
+        "marital_status": data.get("marital_status"),
+        "income_info": data.get("income_info"),
+        "asset_info": data.get("asset_info"),
+        "car_value": data.get("car_value"),
+    }
+
+    try:
+        prompt = build_check_prompt(notice_text, user_profile)
+        raw = call_solar(prompt)
+    except RuntimeError as exc:
+        # 키 미설정 등 호출 준비 문제
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "detail": str(exc)},
+        )
+    except Exception as exc:
+        # 네트워크/시간이슈 등 실제 호출 실패
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "detail": f"Solar 호출 실패: {exc}"},
+        )
+
+    parsed = _parse_eligibility_result(raw)
+    result_label = parsed.get("result") or "needs_review"
+    summary_text = parsed.get("summary")
+    details = parsed.get("details") or []
+
+    # 저장
+    conn = get_db()
+    cursor = conn.cursor()
+    now = datetime.now().isoformat()
+
+    # 공고 ID: 본문에 해시 기반 ID를 부여해 재사용한다
+    notice_id = str(uuid.uuid5(uuid.NAMESPACE_OID, notice_text[:500]))
+
+    # 공고가 없으면 light 등록(원문 저장)
+    cursor.execute("SELECT id FROM notices WHERE id = ?", (notice_id,))
+    if not cursor.fetchone():
+        cursor.execute(
+            """INSERT INTO notices (id, title, agency, notice_type, region, publish_date,
+               apply_start, apply_end, status, raw_content, created_at, updated_at)
+               VALUES (?, '공고 판정', '', '', '', '', '', '', 'published', ?, ?, ?)""",
+            (notice_id, notice_text, now, now),
+        )
+
+    result_id = str(uuid.uuid4())
+    cursor.execute(
+        """INSERT INTO eligibility_results
+           (id, user_id, notice_id, result, summary, counts_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            result_id,
+            user_id,
+            notice_id,
+            result_label,
+            summary_text,
+            json.dumps({"detail_count": len(details)}, ensure_ascii=False),
+            now,
+        ),
+    )
+
+    for d in details:
+        cursor.execute(
+            """INSERT INTO requirement_details
+               (id, result_id, requirement_name, requirement_type,
+                notice_criteria, user_info, result, notes)
+               VALUES (?, ?, ?, 'mandatory', ?, ?, ?, ?)""",
+            (
+                str(uuid.uuid4()),
+                result_id,
+                d.get("requirement_name"),
+                d.get("notice_criteria"),
+                d.get("user_info"),
+                d.get("result"),
+                d.get("notes"),
+            ),
+        )
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "status": "ok",
+        "result": result_label,
+        "summary": summary_text,
+        "details": details,
+        "notice_id": notice_id,
+    }
+
 
 @app.get("/api/health")
 async def health_check():

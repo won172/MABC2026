@@ -45,20 +45,20 @@
         <div class="field">
           <label class="field-label" for="dob">생년월일</label>
           <div class="field-hint">만 나이 계산에 사용해요. 공고 기준일에 따라 판정 시점이 달라질 수 있어요.</div>
-          <input class="field-input" id="dob" type="date" name="dob" value="{{ profile.dob or '' }}" aria-describedby="dob-hint" required />
+          <input class="field-input" id="dob" type="date" name="dob" value="{{ row.dob or '' }}" aria-describedby="dob-hint" required />
           <div id="dob-hint" class="field-hint" style="margin-top:6px;">예시: 1997년 4월생 → 만 29세 (공고일 기준)</div>
         </div>
 
         <div class="field">
           <label class="field-label" for="region">현재 거주 지역</label>
           <div class="field-hint">시·도를 알려주시면, 지역별 조건이 있는 공고에서 확인할 수 있어요.</div>
-          <input class="field-input" id="region" type="text" name="region" value="{{ profile.region or '' }}" placeholder="예: 서울특별시, 부산광역시" />
+          <input class="field-input" id="region" type="text" name="region" value="{{ row.region or '' }}" placeholder="예: 서울특별시, 부산광역시" />
         </div>
 
         <div class="field">
           <label class="field-label" for="residence-duration">거주 기간</label>
           <div class="field-hint">공고에서 거주기간을 요구할 때 사용해요. 단위는 자유롭게 입력할 수 있어요.</div>
-          <input class="field-input" id="residence-duration" type="text" name="residence_duration" value="{{ profile.residence_duration or '' }}" placeholder="예: 3년, 2년 4개월, 1년" />
+          <input class="field-input" id="residence-duration" type="text" name="residence_duration" value="{{ row.residence_duration or '' }}" placeholder="예: 3년, 2년 4개월, 1년" />
         </div>
 
       {% elif current_step == 2 %}
@@ -67,16 +67,16 @@
             <legend class="field-label">무주택 여부</legend>
             <div class="field-hint">공고에서 세대 구성원 무주택 여부를 확인할 때 사용해요.</div>
             <div class="field-row" role="radiogroup" aria-label="무주택 여부">
-              <label class="field-choice {% if profile.housing_status == 'yes' %}selected{% endif %}">
-                <input type="radio" name="housing_status" value="yes" {% if profile.housing_status == 'yes' %}checked{% endif %} />
+              <label class="field-choice {% if row.housing_status == 'yes' %}selected{% endif %}">
+                <input type="radio" name="housing_status" value="yes" {% if row.housing_status == 'yes' %}checked{% endif %} />
                 <span>무주택이에요</span>
               </label>
-              <label class="field-choice {% if profile.housing_status == 'no' %}selected{% endif %}">
-                <input type="radio" name="housing_status" value="no" {% if profile.housing_status == 'no' %}checked{% endif %} />
+              <label class="field-choice {% if row.housing_status == 'no' %}selected{% endif %}">
+                <input type="radio" name="housing_status" value="no" {% if row.housing_status == 'no' %}checked{% endif %} />
                 <span>주택이 있어요</span>
               </label>
-              <label class="field-choice {% if profile.housing_status == 'unknown' %}selected{% endif %}">
-                <input type="radio" name="housing_status" value="unknown" {% if profile.housing_status == 'unknown' %}checked{% endif %} />
+              <label class="field-choice {% if row.housing_status == 'unknown' %}selected{% endif %}">
+                <input type="radio" name="housing_status" value="unknown" {% if row.housing_status == 'unknown' %}checked{% endif %} />
                 <span>아직 모르겠어요</span>
               </label>
             </div>
@@ -93,16 +93,16 @@
             <legend class="field-label">혼인 여부</legend>
             <div class="field-hint">공고에서 혼인 여부를 확인할 때 사용해요. 필요하지 않은 공고에서는 이 항목을 묻지 않아요.</div>
             <div class="field-row" role="radiogroup" aria-label="혼인 여부">
-              <label class="field-choice {% if profile.marital_status == 'single' %}selected{% endif %}">
-                <input type="radio" name="marital_status" value="single" {% if profile.marital_status == 'single' %}checked{% endif %} />
+              <label class="field-choice {% if row.marital_status == 'single' %}selected{% endif %}">
+                <input type="radio" name="marital_status" value="single" {% if row.marital_status == 'single' %}checked{% endif %} />
                 <span>미혼이에요</span>
               </label>
-              <label class="field-choice {% if profile.marital_status == 'married' %}selected{% endif %}">
-                <input type="radio" name="marital_status" value="married" {% if profile.marital_status == 'married' %}checked{% endif %} />
+              <label class="field-choice {% if row.marital_status == 'married' %}selected{% endif %}">
+                <input type="radio" name="marital_status" value="married" {% if row.marital_status == 'married' %}checked{% endif %} />
                 <span>기혼이에요</span>
               </label>
-              <label class="field-choice {% if profile.marital_status == 'unknown' %}selected{% endif %}">
-                <input type="radio" name="marital_status" value="unknown" {% if profile.marital_status == 'unknown' %}checked{% endif %} />
+              <label class="field-choice {% if row.marital_status == 'unknown' %}selected{% endif %}">
+                <input type="radio" name="marital_status" value="unknown" {% if row.marital_status == 'unknown' %}checked{% endif %} />
                 <span>아직 모르겠어요</span>
               </label>
             </div>
@@ -113,7 +113,7 @@
         <div class="field">
           <label class="field-label" for="income_info">월평균 소득</label>
           <div class="field-hint">공고 기준으로 직접 확인한 값을 입력해요. 잘 모르면 "모름"이라고 입력해도 돼요.</div>
-          <input class="field-input" id="income_info" type="text" name="income_info" value="{{ profile.income_info or '' }}" placeholder="예: 모름, 210만원, 확인 중" />
+          <input class="field-input" id="income_info" type="text" name="income_info" value="{{ row.income_info or '' }}" placeholder="예: 모름, 210만원, 확인 중" />
           <div class="field-hint" style="margin-top:6px;">
             단순 월급·실수령액과 공고상 월평균소득은 다를 수 있어요.
             공고 기준에 맞는 값인지 확인이 필요해요.
@@ -123,7 +123,7 @@
         <div class="field">
           <label class="field-label" for="asset_info">총자산</label>
           <div class="field-hint">공고 기준으로 직접 확인한 값을 입력해요. 잘 모르면 "모름"이라고 입력해도 돼요.</div>
-          <input class="field-input" id="asset_info" type="text" name="asset_info" value="{{ profile.asset_info or '' }}" placeholder="예: 모름, 1억 2천만원, 확인 중" />
+          <input class="field-input" id="asset_info" type="text" name="asset_info" value="{{ row.asset_info or '' }}" placeholder="예: 모름, 1억 2천만원, 확인 중" />
           <div class="field-hint" style="margin-top:6px;">
             총자산 = 부동산 + 자동차 + 금융자산 + 기타자산 − 부채.
             직접 확인 경로가 필요하면 "모름"으로 두고 넘어가도 돼요.
@@ -133,7 +133,7 @@
         <div class="field">
           <label class="field-label" for="car_value">자동차 가액</label>
           <div class="field-hint">공고 기준으로 직접 확인한 값을 입력해요. 해당 없으면 "없음", 잘 모르면 "모름"이라고 입력해도 돼요.</div>
-          <input class="field-input" id="car_value" type="text" name="car_value" value="{{ profile.car_value or '' }}" placeholder="예: 모름, 없음, 1,500만원" />
+          <input class="field-input" id="car_value" type="text" name="car_value" value="{{ row.car_value or '' }}" placeholder="예: 모름, 없음, 1,500만원" />
           <div class="field-hint" style="margin-top:6px;">
             자동차 가액은 기준가액(차량기준가액 / 시가표준액) 개념이에요.
             보험개발원·카히스토리 또는 홈택스·손택스에서 확인할 수 있어요.
@@ -152,35 +152,35 @@
           <div class="summary-grid">
             <div class="summary-item">
               <div class="summary-item-label">생년월일</div>
-              <div class="summary-item-value">{{ profile.dob or '입력 안 함' }}</div>
+              <div class="summary-item-value">{{ row.dob or '입력 안 함' }}</div>
             </div>
             <div class="summary-item">
               <div class="summary-item-label">거주 지역</div>
-              <div class="summary-item-value">{{ profile.region or '입력 안 함' }}</div>
+              <div class="summary-item-value">{{ row.region or '입력 안 함' }}</div>
             </div>
             <div class="summary-item">
               <div class="summary-item-label">거주 기간</div>
-              <div class="summary-item-value">{{ profile.residence_duration or '입력 안 함' }}</div>
+              <div class="summary-item-value">{{ row.residence_duration or '입력 안 함' }}</div>
             </div>
             <div class="summary-item">
               <div class="summary-item-label">무주택 여부</div>
-              <div class="summary-item-value">{{ housing_status_label(profile.housing_status) or '입력 안 함' }}</div>
+              <div class="summary-item-value">{{ housing_status_label(row.housing_status) or '입력 안 함' }}</div>
             </div>
             <div class="summary-item">
               <div class="summary-item-label">혼인 여부</div>
-              <div class="summary-item-value">{{ marital_status_label(profile.marital_status) or '입력 안 함' }}</div>
+              <div class="summary-item-value">{{ marital_status_label(row.marital_status) or '입력 안 함' }}</div>
             </div>
             <div class="summary-item">
               <div class="summary-item-label">소득 (월평균)</div>
-              <div class="summary-item-value">{{ profile.income_info or '입력 안 함' }}</div>
+              <div class="summary-item-value">{{ row.income_info or '입력 안 함' }}</div>
             </div>
             <div class="summary-item">
               <div class="summary-item-label">총자산</div>
-              <div class="summary-item-value">{{ profile.asset_info or '입력 안 함' }}</div>
+              <div class="summary-item-value">{{ row.asset_info or '입력 안 함' }}</div>
             </div>
             <div class="summary-item">
               <div class="summary-item-label">자동차 가액</div>
-              <div class="summary-item-value">{{ profile.car_value or '입력 안 함' }}</div>
+              <div class="summary-item-value">{{ row.car_value or '입력 안 함' }}</div>
             </div>
           </div>
           <div class="summary-note">
@@ -196,7 +196,7 @@
       <div class="onboarding-actions">
         <div class="left-actions">
           <label class="checkbox-note">
-            <input type="checkbox" id="notify-checkbox" {% if profile.notify_eligible %}checked{% endif %} />
+            <input type="checkbox" id="notify-checkbox" {% if row.notify_eligible %}checked{% endif %} />
             <span>나중에 다시 확인할 항목을 알림으로 받기</span>
           </label>
         </div>

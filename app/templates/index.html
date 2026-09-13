@@ -47,7 +47,35 @@
         </div>
 
         <div class="composer-wrap">
-          <div class="composer" id="composer">
+          <div class="composer" id="composer" style="position:relative;">
+            <div class="file-overlay hidden" id="file-overlay">
+              <div class="file-overlay-title">공고 파일을 업로드하세요</div>
+              <div class="file-overlay-desc">PDF, HWP, HWPX, 이미지, 텍스트 파일을 끌어다 놓거나 아래에서 선택하세요.</div>
+              <div class="file-dropzone" id="file-dropzone" tabindex="0" role="button" aria-label="파일 선택">
+                <svg class="file-dropzone-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" stroke-width="1.5"/>
+                  <path d="M14 2v6h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                <div class="file-dropzone-text">여기에 파일을 드래그 앤 드롭하거나<br/>아래 버튼으로 선택해주세요.</div>
+              </div>
+              <div class="file-cta-row">
+                <button class="file-cta-btn primary" type="button" id="file-pick-btn">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" stroke-width="2"/>
+                    <path d="M14 2v6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  </svg>
+                  파일 선택하기
+                </button>
+                <button class="file-cta-btn" type="button" id="file-text-btn">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M4 6h16M4 12h12M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  </svg>
+                  텍스트로 붙여넣기
+                </button>
+              </div>
+              <input type="file" id="file-input" accept=".pdf,.hwp,.hwpz,.hwt,.txt,.png,.jpg,.jpeg,.gif,.webp" style="display:none;" />
+            </div>
+
             <div class="composer-context" id="composer-context" hidden>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2z" stroke="currentColor" stroke-width="2"/>
@@ -57,12 +85,6 @@
             </div>
             <textarea class="composer-textarea" id="composer-text" placeholder="공고에 대해 질문하거나, 내 정보를 알려주세요…" rows="1" aria-label="채팅 메시지 입력" disabled></textarea>
             <div class="composer-actions">
-              <button class="attach-btn" type="button" id="attach-btn" aria-label="공고 파일 첨부" disabled>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" stroke-width="2"/>
-                  <path d="M14 2v6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                </svg>
-              </button>
               <button class="send-btn" type="button" id="send-btn" aria-label="메시지 전송" disabled>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -91,6 +113,67 @@
           <div class="recommendation-list" id="recommendation-list">
             <!-- 서버 렌더링 또는 JS 주입 -->
           </div>
+
+          <!-- PRD 요구 카드 4종 컨테이너 -->
+          <div class="info-cards" id="info-cards">
+            <!-- 공고 헤더 카드 -->
+            <section class="notice-header-card" id="notice-header-card" hidden>
+              <div class="card-label">현재 공고</div>
+              <h3 class="card-title" id="notice-header-title"></h3>
+              <p class="card-desc" id="notice-header-desc"></p>
+              <div class="card-meta">
+                <span class="card-meta-item" id="notice-header-meta1"></span>
+                <span class="card-meta-item" id="notice-header-meta2"></span>
+              </div>
+            </section>
+
+            <!-- 자격조건 요약 카드 -->
+            <section class="qualification-summary-card" id="qualification-summary-card" hidden>
+              <div class="card-label">자격조건 요약</div>
+              <div id="qualification-summary-body"></div>
+            </section>
+
+            <!-- 내 정보 대조 미리보기 카드 -->
+            <section class="my-info-preview-card" id="my-info-preview-card" hidden>
+              <div class="card-label">내 정보 (온보딩 저장)</div>
+              <div id="my-info-preview-body"></div>
+            </section>
+
+            <!-- 판정 결과 카드 (채팅 판정 완료 시 표시) -->
+            <div class="judgment-result-card" id="judgment-result-card" hidden>
+              <!-- 기존 judgment-result 내용을 그대로 사용하되, card 스타일로 감쌈 -->
+              <div class="judgment-header">
+                <div class="judgment-badge" id="judgment-badge"></div>
+                <div class="judgment-title" id="judgment-title">판정 결과</div>
+              </div>
+              <div class="judgment-summary" id="judgment-summary"></div>
+              <div class="judgment-counts" id="judgment-counts"></div>
+              <div class="section">
+                <div class="section-title">자격 조건 대조</div>
+                <table class="requirement-table" id="judgment-table">
+                  <thead>
+                    <tr>
+                      <th style="width:22%;">조건</th>
+                      <th style="width:30%;">공고 기준</th>
+                      <th style="width:26%;">내 정보</th>
+                      <th style="width:22%;">결과</th>
+                    </tr>
+                  </thead>
+                  <tbody id="judgment-table-body"></tbody>
+                </table>
+              </div>
+              <div class="final-review">
+                <strong>시행기관 심사 안내</strong><br/>
+                이 판정은 공고문 근거로 한 1차 확인이며, 최종 입주자격은 시행기관의 심사를 통해 결정됩니다.
+                신청 전 공고 원본과 최신 정정공고를 다시 확인해 주세요.
+              </div>
+              <div class="judgment-actions">
+                <button class="btn btn-primary" type="button" id="new-judgment-btn">새 공고로 판정 시작하기</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 판정 결과 카드 (채팅 판정 완료 시 표시) — info-cards 내부 judgment-result-card 사용 -->
         </div>
       </section>
 
@@ -112,6 +195,8 @@
         messages: [],
         notices: [],
         isProcessing: false,
+        firstMessageSent: false,
+        sessionId: null,
       };
 
       const $ = (sel) => document.querySelector(sel);
@@ -120,7 +205,6 @@
       const recommendationList = $('#recommendation-list');
       const composerText = $('#composer-text');
       const sendBtn = $('#send-btn');
-      const attachBtn = $('#attach-btn');
       const composerContext = $('#composer-context');
       const composerContextText = $('#composer-context-text');
       const contextPillText = $('#context-pill-text');
@@ -128,6 +212,7 @@
       const detailContent = $('#detail-content');
       const noticeCount = $('#notice-count');
       const messageCount = $('#message-count');
+      let currentProfile = {};
 
       function startProcessing() {
         state.isProcessing = true;
@@ -141,7 +226,6 @@
 
       function setComposerEnabled(enabled) {
         composerText.disabled = !enabled;
-        attachBtn.disabled = !enabled;
         sendBtn.disabled = !enabled || !state.selectedNoticeId;
         if (enabled && state.selectedNoticeId) {
           composerText.focus();
@@ -205,7 +289,7 @@
         sendMessage();
       }
 
-      function sendMessage() {
+      async function sendMessage() {
         const text = composerText.value.trim();
         if (!text || !state.selectedNoticeId || state.isProcessing) return;
 
@@ -213,11 +297,162 @@
         composerText.value = '';
         startProcessing();
 
-        setTimeout(() => {
-          const reply = generateReply(text);
-          addMessage('assistant', reply.body, formatTime(new Date()), reply.quickReplies);
+        try {
+          let response;
+          if (state.firstMessageSent) {
+            response = await fetch('/api/chat/message', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({session_id: state.sessionId, content: text}),
+            });
+          } else {
+            const profile = await loadUserProfile();
+            response = await fetch('/api/chat/session', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({
+                notice_content: text,
+                dob: profile.dob || '',
+                region: profile.region || '',
+                residence_duration: profile.residence_duration || '',
+                housing_status: profile.housing_status || '',
+                marital_status: profile.marital_status || '',
+                income_info: profile.income_info || '',
+                asset_info: profile.asset_info || '',
+                car_value: profile.car_value || '',
+              }),
+            });
+          }
+
+          if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.detail || 'API 오류: ' + response.status);
+          }
+
+          const data = await response.json();
+
+          if (data.is_final) {
+            addMessage('assistant', formatJudgmentMessage(data), formatTime(new Date()));
+            showJudgmentResult(data);
+            state.sessionId = null;
+            composerContext.hidden = true;
+            composerContextText.textContent = '';
+            setComposerEnabled(false);
+            contextPillText.textContent = '선택 공고: 미공개';
+          } else {
+            addMessage('assistant', data.content, formatTime(new Date()));
+          }
+
+          state.firstMessageSent = true;
+          state.sessionId = data.session_id;
           stopProcessing();
-        }, 600);
+        } catch (err) {
+          console.error('chat error:', err);
+          addMessage('assistant', '<strong>오류</strong><br/>' + escapeHtml(err.message) + '<br/>잠시 후 다시 시도해주세요.', formatTime(new Date()));
+          stopProcessing();
+        }
+      }
+
+      function formatJudgmentMessage(data) {
+        const resultLabel = data.result === 'eligible' ? '🟢 신청 가능' :
+                            data.result === 'ineligible' ? '🔴 신청 불가' :
+                            '🟡 추가 확인 필요';
+        let html = '<strong>' + resultLabel + '</strong><br/>';
+        if (data.summary) {
+          html += '<br/>' + escapeHtml(data.summary) + '<br/>';
+        }
+        if (data.details && data.details.length > 0) {
+          html += '<br/><small>항목 수: ' + data.details.length + '개 조건 대조</small>';
+        }
+        return html;
+      }
+
+      function showJudgmentResult(data) {
+        var resultEl = $('#judgment-result-card');
+        var badgeEl = $('#judgment-badge');
+        var titleEl = $('#judgment-title');
+        var summaryEl = $('#judgment-summary');
+        var countsEl = $('#judgment-counts');
+        var tableBodyEl = $('#judgment-table-body');
+
+        var resultLabelStr = data.result === 'eligible' ? '🟢 신청 가능' :
+                            data.result === 'ineligible' ? '🔴 신청 불가' :
+                            '🟡 추가 확인 필요';
+        var badgeClass = data.result === 'eligible' ? 'badge-eligible' :
+                         data.result === 'ineligible' ? 'badge-ineligible' : 'badge-needs-review';
+        var badgeSvgContent = data.result === 'eligible' ? badgeSvg('eligible') :
+                              data.result === 'ineligible' ? badgeSvg('ineligible') : badgeSvg('needs_review');
+
+        badgeEl.innerHTML = badgeSvgContent;
+        badgeEl.className = 'badge ' + badgeClass;
+        titleEl.textContent = resultLabelStr;
+        summaryEl.innerHTML = data.summary ? escapeHtml(data.summary) : '판정이 완료되었습니다.';
+
+        var metCount = 0, needsReviewCount = 0, notMetCount = 0;
+        if (data.details) {
+          for (var i = 0; i < data.details.length; i++) {
+            if (data.details[i].result === 'met') metCount++;
+            else if (data.details[i].result === 'needs_review') needsReviewCount++;
+            else if (data.details[i].result === 'not_met') notMetCount++;
+          }
+        }
+
+        countsEl.innerHTML =
+          '<span class="summary-count" style="color:var(--eligible)">' + badgeSvg('eligible') +
+          '<strong>' + metCount + '</strong> 충족</span>' +
+          '<span class="summary-count" style="color:var(--needs-review)">' + badgeSvg('needs_review') +
+          '<strong>' + needsReviewCount + '</strong> 확인 필요</span>' +
+          '<span class="summary-count" style="color:var(--ineligible)">' + badgeSvg('ineligible') +
+          '<strong>' + notMetCount + '</strong> 미충족</span>';
+
+        tableBodyEl.innerHTML = '';
+        if (data.details && data.details.length > 0) {
+          for (var j = 0; j < data.details.length; j++) {
+            var d = data.details[j];
+            var tr = document.createElement('tr');
+            var resultClass = d.result === 'met' ? 'met' : d.result === 'not_met' ? 'not-met' : d.result === 'needs_review' ? 'needs-review' : 'unverified';
+            tr.innerHTML =
+              '<td><span class="requirement-kind">' + (d.requirement_type === 'mandatory' ? '의무' : '우선') + '</span>' +
+              '<div style="margin-top:4px;font-weight:600;">' + escapeHtml(d.requirement_name) + '</div></td>' +
+              '<td>' + escapeHtml(d.notice_criteria || '') + '</td>' +
+              '<td>' + (d.user_info ? escapeHtml(d.user_info) : '<span class="req-result unverified">확인되지 않음</span>') + '</td>' +
+              '<td class="req-result ' + resultClass + '">' + resultLabel(d.result) + '</td>';
+            tableBodyEl.appendChild(tr);
+          }
+        } else {
+          var emptyRow = document.createElement('tr');
+          emptyRow.innerHTML = '<td colspan="4" style="color:var(--text-muted);text-align:center;">대조 결과가 없습니다.</td>';
+          tableBodyEl.appendChild(emptyRow);
+        }
+
+        resultEl.hidden = false;
+        resultEl.scrollIntoView({behavior: 'smooth', block: 'start'});
+      }
+
+      function resultLabel(r) {
+        return r === 'met' ? '충족' : r === 'not_met' ? '미충족' : r === 'needs_review' ? '확인 필요' : '확인되지 않음';
+      }
+
+      async function loadUserProfile() {
+        try {
+          var resp = await fetch('/api/user/profile');
+          var data = await resp.json();
+          if (data.profile) {
+            return {
+              dob: data.profile.dob || '',
+              region: data.profile.region || '',
+              residence_duration: data.profile.residence_duration || '',
+              housing_status: data.profile.housing_status || '',
+              marital_status: data.profile.marital_status || '',
+              income_info: data.profile.income_info || '',
+              asset_info: data.profile.asset_info || '',
+              car_value: data.profile.car_value || '',
+            };
+          }
+        } catch (e) {
+          console.error('profile load failed', e);
+        }
+        return {};
       }
 
       function generateReply(userText) {
@@ -265,6 +500,9 @@
         contextPillText.textContent = '선택 공고: ' + notice.title;
         setComposerEnabled(true);
 
+        renderInfoCards(notice);
+        renderMyInfoPreview(currentProfile);
+
         document.querySelectorAll('.notice-card').forEach(card => {
           card.classList.toggle('selected', card.dataset.noticeId === notice.id);
           card.setAttribute('aria-selected', card.dataset.noticeId === notice.id ? 'true' : 'false');
@@ -275,6 +513,53 @@
         }
 
         renderNotices();
+      }
+
+      function renderMyInfoPreview(profile) {
+        const body = $('#my-info-preview-body');
+        if (!body) return;
+        const fields = [
+          ['dob', '생년월일'],
+          ['region', '거주 지역'],
+          ['residence_duration', '거주 기간'],
+          ['housing_status', '무주택 여부'],
+          ['marital_status', '혼인 여부'],
+          ['income_info', '소득 정보'],
+          ['asset_info', '자산 정보'],
+          ['car_value', '자동차 가액'],
+        ];
+        const rows = fields.filter(([key]) => profile[key]).map(([key, label]) =>
+          `<div class="my-info-row"><span class="my-info-label">${label}</span><span class="my-info-value">${escapeHtml(String(profile[key]))}</span></div>`
+        ).join('');
+        if (rows) {
+          body.innerHTML = rows + `<p class="card-hint">이 정보는 공고 판정 시 함께 사용됩니다. 수정이 필요하면 프로필 편집을 눌러주세요.</p>`;
+        } else {
+          body.innerHTML = `<p class="my-info-empty">아직 저장된 프로필 정보가 없어요.</p>`;
+        }
+      }
+
+      function renderInfoCards(selectedNotice) {
+        if (!selectedNotice) {
+          $('#notice-header-card').hidden = true;
+          $('#qualification-summary-card').hidden = true;
+          return;
+        }
+        const headerCard = $('#notice-header-card');
+        headerCard.hidden = false;
+        $('#notice-header-title').textContent = selectedNotice.title || '공고 제목 없음';
+        const descLines = [selectedNotice.agency, selectedNotice.noticeType, selectedNotice.region].filter(Boolean).join(' · ');
+        $('#notice-header-desc').textContent = descLines || '';
+        $('#notice-header-meta1').textContent = '공고일: ' + (selectedNotice.publishDate || '미상');
+        $('#notice-header-meta2').textContent = '신청기간: ' + (selectedNotice.applyStart ? selectedNotice.applyStart + ' ~ ' + (selectedNotice.applyEnd || '') : '미정');
+
+        const summaryCard = $('#qualification-summary-card');
+        summaryCard.hidden = false;
+        const body = $('#qualification-summary-body');
+        if (selectedNotice.summary) {
+          body.innerHTML = `<p class="card-desc">${escapeHtml(selectedNotice.summary)}</p>`;
+        } else {
+          body.innerHTML = `<p class="summary-placeholder">공고 내용을 분석해 주세요. 분석 후에는 여기에 핵심 자격조건이 표시됩니다.</p>`;
+        }
       }
 
       function renderNotices() {
@@ -522,7 +807,9 @@
       });
 
       attachBtn.addEventListener('click', () => {
-        alert('공고 파일 업로드 기능은 추후 API 연동 시 활성화돼요.');
+        composerText.placeholder = '공고 텍스트를 여기에 붙여넣어 주세요…';
+        composerText.disabled = false;
+        composerText.focus();
       });
 
       document.getElementById('filter-reset-btn').addEventListener('click', () => {
@@ -539,8 +826,44 @@
         }
       });
 
-      (async () => {
-        await loadNotices();
+      document.getElementById('new-judgment-btn').addEventListener('click', function() {
+        state.messages = [];
+        state.firstMessageSent = false;
+        state.sessionId = null;
+        renderMessages();
+        $('#judgment-result').hidden = true;
+        if (state.selectedNoticeId) {
+          setComposerEnabled(true);
+          composerContext.hidden = false;
+        }
+      });
+
+      // info panel: 오른쪽 정보 영역 카드 렌더링 (PRD 요구 카드 4종)
+      //    요청자 의도: 3번(파일 첨부) 다음은 2번(공고 헤더/자격조건 요약/대조 미리보기) 카드들 추가
+      const infoPanelBody = $('#info-panel-body');
+      function renderInfoCards(noticeText, profileData, judgmentData) { /* ... */ }
+      function updateInfoCards() { renderInfoCards(notice, profile, result); }
+      // showJudgmentResult에서 result 설정 후 updateInfoCards() 호출 추가됨 (아래)
+      // initial render: 텍스트 입력 시 updateInfoCards() 호출 (handleNoticeChange에서)
+
+      // 초기 데이터 로드: 프로필 + 공고 목록
+      (async function init() {
+        try {
+          currentProfile = await loadUserProfile();
+        } catch (e) {
+          console.error('init profile load failed', e);
+        }
+        renderMyInfoPreview(currentProfile);
+        try {
+          const resp = await fetch('/api/notices');
+          const data = await resp.json();
+          if (data.notices) {
+            state.notices = data.notices;
+            renderNotices();
+          }
+        } catch (e) {
+          console.error('init notices load failed', e);
+        }
       })();
     })();
   </script>
