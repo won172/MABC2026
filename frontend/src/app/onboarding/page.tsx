@@ -50,19 +50,20 @@ export default function OnboardingPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (step < 5) {
-      const saved = await saveProgress();
+      const nextStep = (Math.min(step + 1, 5) as Step);
+      const saved = await saveProgress(nextStep);
       if (saved) {
-        setStep((s) => (Math.min(s + 1, 5) as Step));
+        setStep(nextStep);
       }
       return;
     }
-    const saved = await saveProgress();
+    const saved = await saveProgress(5);
     if (saved) {
-      window.location.href = '/';
+      window.location.href = '/check';
     }
   };
 
-  const saveProgress = async (): Promise<boolean> => {
+  const saveProgress = async (nextStep: Step): Promise<boolean> => {
     try {
       const base = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
       const res = await fetch(`${base}/api/onboarding/progress`, {
@@ -70,7 +71,7 @@ export default function OnboardingPage() {
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          current_step: step,
+          current_step: nextStep,
           dob: profile.dob,
           region: profile.region,
           residence_duration: profile.residenceDuration,
@@ -92,11 +93,11 @@ export default function OnboardingPage() {
   };
 
   const skip = () => {
-    window.location.href = '/';
+    window.location.href = '/check';
   };
 
   const later = () => {
-    window.location.href = '/';
+    window.location.href = '/check';
   };
 
   const goPrev = () => {
@@ -158,6 +159,14 @@ export default function OnboardingPage() {
       </header>
 
       <main id="main" className="flex-1 flex flex-col max-w-2xl mx-auto w-full px-4 py-10">
+        <div className="onboarding-intro">
+          <p className="onboarding-intro-title">청년주택 모집공고, 신청 가능한지 직접 확인해 보세요.</p>
+          <p className="onboarding-intro-body">
+            본인 정보를 한 번 입력하면, 공고를 올리고 채팅하듯 문의해서 신청 가능 여부를 빠르게 확인할 수 있어요.
+            공고마다 요구하는 항목이 달라서, 필요한 정보만 차례로 물어봐요.
+          </p>
+        </div>
+
         <div className="onboarding-header">
           <div className="step-row" role="list" aria-label="진행 단계">
             {steps.map((s) => (
