@@ -500,6 +500,14 @@ body {
   text-align: center;
 }
 
+/* 말풍선 줄 수 제한 (긴 답변을 몇 줄만 보여주고 펼치기/접기 가능하게) */
+.line-clamp-4 {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 /* Responsive */
 @media (max-width: 640px) {
   .top-nav {

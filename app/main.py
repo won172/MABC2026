@@ -12,10 +12,12 @@ import json
 import re
 import requests
 from datetime import datetime
+from typing import Any
+from html import unescape
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 app = FastAPI(
     title="청년주택 적격성 워크스페이스",
@@ -36,7 +38,16 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
 # 템플릿 설정
-templates = Jinja2Templates(directory="templates")
+from jinja2 import Environment, FileSystemLoader
+
+_template_dir = os.path.join(os.path.dirname(__file__), "templates")
+_jinja_env = Environment(
+    loader=FileSystemLoader(_template_dir),
+    cache_size=0,
+)
+_templates = Jinja2Templates(directory=_template_dir)
+_templates.env = _jinja_env
+templates = _templates
 
 # DB 설정
 DB_PATH = os.path.join(os.path.dirname(__file__), "user_data.db")
@@ -329,16 +340,19 @@ async def onboarding_step(request: Request, step: int):
         user_id = str(uuid.uuid4())
     
     # 사용자 프로필 조회 또는 생성
+    # 사용자 프로필 조회 또는 생성
     cursor.execute("SELECT * FROM user_profiles WHERE id = ?", (user_id,))
     row = cursor.fetchone()
-    
     if not row:
         cursor.execute(
             "INSERT INTO user_profiles (id, created_at, updated_at, onboarding_step) VALUES (?, ?, ?, ?)",
             (user_id, datetime.now().isoformat(), datetime.now().isoformat(), step)
         )
         conn.commit()
-    
+        # INSERT 후 행 다시 조회
+        cursor.execute("SELECT * FROM user_profiles WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+    conn.close()
     conn.close()
 
     response = templates.TemplateResponse(
@@ -384,6 +398,22 @@ async def save_onboarding_progress(request: Request, data: OnboardingProgress):
         now, user_id
     ))
     conn.commit()
+
+    if cursor.rowcount == 0:
+        cursor.execute("""
+            INSERT INTO user_profiles (id, created_at, updated_at, dob, region, residence_duration,
+                housing_status, marital_status, income_info, asset_info, car_value,
+                notify_eligible, onboarding_step)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user_id, now, now,
+            data.dob, data.region, data.residence_duration,
+            data.housing_status, data.marital_status,
+            data.income_info, data.asset_info, data.car_value,
+            int(data.notify_eligible),
+            data.current_step or 2,
+        ))
+        conn.commit()
     conn.close()
     
     return {"status": "ok", "user_id": user_id}
@@ -479,7 +509,7 @@ async def create_notice(request: Request, notice: NoticeCreate):
     
     return {"status": "ok", "notice_id": notice_id}
 
-@app.get("/api/notices")
+@ app.get("/api/notices")
 async def list_notices(request: Request):
     """공고 목록 조회"""
     conn = get_db()
@@ -487,9 +517,217 @@ async def list_notices(request: Request):
     cursor.execute("SELECT * FROM notices WHERE status != 'deleted' ORDER BY publish_date DESC")
     rows = cursor.fetchall()
     conn.close()
-    
+
     notices = [dict(row) for row in rows]
     return {"notices": notices}
+
+
+# === 파일 파싱 (Upstage Document Digitization) ===
+# 모델 선택: 이미지(png/jpg/jpeg/gif/webp) → ocr, 그 외 문서 → document-parse
+# mode는 모두 standard. 키는 서버가 관리하며 프론트에 노출하지 않는다.
+_SUPPORTED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+_SUPPORTED_DOC_EXTS = {
+    ".pdf", ".hwp", ".hwpz", ".pages", ".doc", ".docx", ".xls", ".xlsx",
+    ".ppt", ".pptx", ".txt", ".csv", ".html", ".htm", ".md", ".rtf",
+}
+_SUPPORTED_EXTS = _SUPPORTED_IMAGE_EXTS | _SUPPORTED_DOC_EXTS
+
+
+def _ext(path_or_name: str) -> str:
+    base = os.path.basename(path_or_name)
+    _, ext = os.path.splitext(base)
+    return ext.lower()
+
+
+def _strip_html(html_text: str) -> str:
+    """HTML 문자열을 태그 없는 읽기 쉬운 텍스트로 정리한다.
+
+    - 스크립트/스타일 블록은 제거한다.
+    - br/p/div/h1~h6 등 블록·줄바꿈 요소는 개행 하나로 바꾼다.
+    - 남은 태그는 모두 제거한다.
+    - HTML 엔티티를 디코딩한다.
+    - 연속된 공백을 하나로 모으고 양끝을 정리한다.
+    """
+    text = html_text
+    text = re.sub(r"<script[^>]*>.*?</script>", " ", text, flags=re.S | re.I)
+    text = re.sub(r"<style[^>]*>.*?</style>", " ", text, flags=re.S | re.I)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"</(p|div|li|h[1-6]|tr|br|section|article|header|footer|main|aside|nav|figure|figcaption|blockquote|pre|table|ul|ol)>", "\n", text, flags=re.I)
+    text = re.sub(r"<(p|div|li|h[1-6]|tr|section|article|header|footer|main|aside|nav|figure|blockquote|pre|table|ul|ol)[^>]*>", "\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = unescape(text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _model_for_ext(ext: str) -> str:
+    if ext in _SUPPORTED_IMAGE_EXTS:
+        return "ocr"
+    return "document-parse"
+
+
+@app.post("/api/document/parse")
+async def document_parse(request: Request):
+    """선택한 공고 파일을 Upstage Document Digitization으로 파싱해 텍스트를 추출한다.
+
+    - 서버 환경변수 UPSTAGE_API_KEY를 사용하며 프론트에 노출하지 않는다.
+    - 이미지 계열(.png/.jpg/.jpeg/.gif/.webp)은 model=ocr, mode=standard.
+    - 그 외 지원 문서(.pdf/.hwp/.hwpz/.doc/.docx/.xls/.xlsx/.ppt/.pptx/.txt/.csv/.html/.md/.rtf 등)는
+      model=document-parse, mode=standard.
+    - 지원하지 않는 형식은 400과 안내 메시지를 반환한다.
+    - 파싱 실패(업스테이지 응답 오류 등)는 502와 실패 안내를 반환한다.
+    - 성공 시 {"status":"ok","text":"...", "model":"..."} 를 반환한다.
+      프론트는 이 텍스트를 공고 입력창에 채운다.
+    """
+    user_id = request.cookies.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="사용자 세션이 없습니다")
+
+    api_key = os.environ.get("SOLAR_API_KEY", "").strip()
+    if not api_key:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unavailable",
+                "detail": "서버에 문서 파싱용 Solar API 키가 설정되어 있지 않습니다.",
+            },
+        )
+
+    # FormData로 올라온 파일 (Upstage API도 multipart 표준)
+    form = await request.form()
+    file = form.get("file") or form.get("document")
+    if not file:
+        raise HTTPException(status_code=400, detail="파일이 필요합니다")
+
+    original_name = getattr(file, "filename", "upload")
+    ext = _ext(original_name)
+
+    if ext not in _SUPPORTED_EXTS:
+        supported = ", ".join(sorted(_SUPPORTED_EXTS))
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "unsupported",
+                "detail": f"지원하지 않는 파일 형식입니다({ext}). 지원 형식: {supported}",
+            },
+        )
+
+    model = _model_for_ext(ext)
+
+    # 파일 바이너리 읽기 (UploadFile 또는 raw bytes 모두 처리)
+    raw_bytes: bytes = b""
+    if not isinstance(file, bytes):
+        fobj = getattr(file, "file", None) or getattr(file, "read", None)
+        if fobj is not None:
+            try:
+                raw_bytes = fobj.read()  # type: ignore[union-attr]
+            except Exception:
+                raw_bytes = b""
+
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="빈 파일입니다")
+
+    # Upstage Document Digitization API 호출
+    # 표준: multipart/form-data, field name "document"
+    try:
+        resp = requests.post(
+            "https://api.upstage.ai/v1/document-digitization",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+            },
+            files={"document": (original_name, raw_bytes, "application/octet-stream")},
+            data={"model": model, "mode": "standard"},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+    except requests.HTTPError as exc:
+        detail = "업스테이지 호출 오류"
+        resp_for_err = getattr(exc, "response", None)
+        if resp_for_err is not None:
+            try:
+                err_body = resp_for_err.json()
+                detail = err_body.get("error", {}).get("message", "업스테이지 호출 오류")
+            except Exception:
+                detail = "업스테이지 호출 오류"
+        return JSONResponse(
+            status_code=502,
+            content={
+                "status": "parse_failed",
+                "detail": f"문서 파싱에 실패했습니다: {detail}",
+            },
+        )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "status": "parse_failed",
+                "detail": f"문서 파싱 중 오류가 발생했습니다: {exc}",
+            },
+        )
+
+    extracted = ""
+    if isinstance(body, dict):
+        # Upstage Document Digitization 응답 구조:
+        # - body 자체에 text/markdown/html/result 등이 직접 있을 수 있음
+        # - body["content"]에 내부 JSON 문자열이 들어 있을 수 있음
+        inner: Any = body.get("content")
+        if isinstance(inner, str):
+            try:
+                inner = json.loads(inner)
+            except Exception:
+                inner = None
+        if isinstance(inner, dict):
+            extracted = (
+                inner.get("text")
+                or inner.get("markdown")
+                or inner.get("html")
+                or inner.get("result")
+                or ""
+            )
+            if isinstance(extracted, str) and extracted.strip().lower().startswith("<"):
+                # HTML이면 태그 정리
+                extracted = _strip_html(extracted)
+        elif isinstance(inner, str):
+            extracted = inner
+
+        # body 자체에 직접 필드가 있으면 그걸 우선 사용하지 않음
+        # (content 내부가 더 구체적이면 그쪽을 씀). 만약 inner가 비어있으면
+        # body 직손을 fallback으로 사용.
+        if not extracted:
+            extracted = (
+                body.get("text")
+                or body.get("markdown")
+                or body.get("html")
+                or body.get("result")
+                or ""
+            )
+            if isinstance(extracted, str) and extracted.strip().lower().startswith("<"):
+                extracted = _strip_html(extracted)
+
+        if isinstance(extracted, (dict, list)):
+            extracted = json.dumps(extracted, ensure_ascii=False)
+    extracted = (extracted or "").strip()
+
+    if not extracted:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "status": "parse_failed",
+                "detail": "문서에서 텍스트를 추출하지 못했습니다. 이미지나 스캔 문서라면 OCR 결과가 비어 있을 수 있습니다.",
+            },
+        )
+
+    return {
+        "status": "ok",
+        "text": extracted,
+        "model": model,
+        "original_name": original_name,
+        "character_count": len(extracted),
+    }
 
 @app.post("/api/eligibility/results")
 async def create_eligibility_result(request: Request, result: EligibilityResultCreate):

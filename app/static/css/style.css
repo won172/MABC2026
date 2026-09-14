@@ -1,4 +1,293 @@
-/* Info panel: PRD-required cards */
+/* CSS Variables */
+:root {
+  --primary: #1D4ED8;
+  --primary-hover: #1E40AF;
+  --on-primary: #FFFFFF;
+  --background: #F6F8FB;
+  --surface: #FFFFFF;
+  --surface-subtle: #FBFCFE;
+  --text-primary: #172033;
+  --text-secondary: #556176;
+  --text-muted: #667085;
+  --border: #D9E1EA;
+  --border-strong: #C0CAD6;
+  --focus: #2563EB;
+  --eligible: #166534;
+  --eligible-bg: #F0FDF4;
+  --eligible-border: #BBF7D0;
+  --needs-review: #92400E;
+  --needs-review-bg: #FFFBEB;
+  --needs-review-border: #FDE68A;
+  --ineligible: #991B1B;
+  --ineligible-bg: #FEF2F2;
+  --ineligible-border: #FECACA;
+
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 20px;
+  --space-2xl: 24px;
+}
+
+/* Base */
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  background: var(--background);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Workspace layout: left conversation panel + right info panel */
+.workspace {
+  display: flex;
+  gap: var(--space-lg);
+  height: calc(100vh - 64px);
+  padding: var(--space-lg);
+}
+
+.conversation-panel {
+  flex: 0 0 40%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.info-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--border);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--surface-subtle);
+}
+
+.panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-lg);
+}
+
+.message-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.message-list-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.message-list-empty-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-sm);
+}
+
+.message-list-empty-sub {
+  font-size: 14px;
+  line-height: 1.5;
+  max-width: 26ch;
+}
+
+/* Message bubbles */
+.message {
+  display: flex;
+  flex-direction: column;
+}
+
+.message.user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.message.assistant {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.message-body {
+  max-width: 62%;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.message.user .message-body {
+  background: var(--primary);
+  color: var(--on-primary);
+  border-bottom-right-radius: var(--radius-xs);
+}
+
+.message.assistant .message-body {
+  background: var(--surface-subtle);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: var(--radius-xs);
+}
+
+.message-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: var(--space-xs);
+  padding: 0 var(--space-sm);
+}
+
+.message.user .message-meta {
+  text-align: right;
+}
+
+.quick-replies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin-top: var(--space-xs);
+  padding: 0 var(--space-xs);
+}
+
+.quick-reply {
+  padding: var(--space-xs) var(--space-md);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--primary);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.quick-reply:hover {
+  background: var(--surface);
+  border-color: var(--primary);
+}
+
+/* Composer (chat input area) */
+.composer-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-sm);
+  position: relative;
+}
+
+.composer-textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 44px;
+  max-height: 200px;
+  padding: var(--space-md) var(--space-lg);
+  font-size: 15px;
+  font-family: inherit;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  resize: none;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+.composer-textarea:focus {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+  background: var(--surface);
+}
+
+.composer-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.composer-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.composer-actions .send-btn {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary);
+  color: var(--on-primary);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.composer-actions .send-btn:hover:not(:disabled) {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+
+.composer-actions .send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.helper-text {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 0 var(--space-md) var(--space-md);
+}
 .info-cards {
   display: flex;
   flex-direction: column;
