@@ -568,7 +568,7 @@ async def get_user_eligibility(request: Request, notice_id: str):
 # === 스킬 로드 ===
 SKILL_PATH = os.environ.get(
     "SKILL_PATH",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "skills", "SKILL.md"),
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "skills", "youth-housing-eligibility-checker", "SKILL.md"),
 )
 
 def _load_skill_md() -> str:
@@ -871,6 +871,25 @@ async def create_chat_session(request: Request, data: ChatSessionCreate):
     conn = get_db()
     cursor = conn.cursor()
 
+    # 전달받은 프로필을 user_profiles에 저장해둔다.
+    # 이후 /api/chat/message에서 DB 기준으로 프로필을 읽어오므로
+    # 세션 생성 시점에 전달된 프로필이 유실되지 않는다.
+    profile_now = datetime.now().isoformat()
+    cursor.execute(
+        """UPDATE user_profiles
+           SET dob = ?, region = ?, residence_duration = ?,
+               housing_status = ?, marital_status = ?,
+               income_info = ?, asset_info = ?, car_value = ?,
+               updated_at = ?
+           WHERE id = ?""",
+        (
+            data.dob, data.region, data.residence_duration,
+            data.housing_status, data.marital_status,
+            data.income_info, data.asset_info, data.car_value,
+            profile_now, user_id,
+        ),
+    )
+
     cursor.execute("SELECT id FROM notices WHERE id = ?", (notice_id,))
     if cursor.fetchone() is None:
         cursor.execute(
@@ -910,6 +929,14 @@ async def create_chat_session(request: Request, data: ChatSessionCreate):
         result_label = parsed.get("result") or "needs_review"
         summary_text = parsed.get("summary")
         details = parsed.get("details") or []
+
+        # 조건 상태 재확인: details에 needs_review/unverified가 하나라도 있으면
+        # Solar가 🟢로 판정했더라도 전체 결과는 needs_review로 내린다.
+        has_unconfirmed = any(
+            d.get("result") in ("needs_review", "unverified") for d in details
+        )
+        if result_label == "eligible" and has_unconfirmed:
+            result_label = "needs_review"
 
         result_id = str(uuid.uuid4())
         conn = get_db()
@@ -1044,6 +1071,14 @@ async def send_chat_message(request: Request, data: ChatMessageCreate):
         result_label = parsed.get("result") or "needs_review"
         summary_text = parsed.get("summary")
         details = parsed.get("details") or []
+
+        # 조건 상태 재확인: details에 needs_review/unverified가 하나라도 있으면
+        # Solar가 🟢로 판정했더라도 전체 결과는 needs_review로 내린다.
+        has_unconfirmed = any(
+            d.get("result") in ("needs_review", "unverified") for d in details
+        )
+        if result_label == "eligible" and has_unconfirmed:
+            result_label = "needs_review"
 
         cursor.execute(
             """UPDATE chat_sessions

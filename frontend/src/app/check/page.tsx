@@ -82,6 +82,7 @@ export default function CheckPage() {
     "공고 내용을 붙여넣고 Ctrl+Enter로 전송하세요."
   );
   const [attachedFileName, setAttachedFileName] = useState<string | null>(null);
+  const [submittedNotice, setSubmittedNotice] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -90,6 +91,7 @@ export default function CheckPage() {
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<Record<string, string | null> | null>(null);
   const [profError, setProfError] = useState<string | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
   const io = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -98,8 +100,14 @@ export default function CheckPage() {
       headers: { Accept: "application/json" },
     })
       .then((r) => r.json())
-      .then((data) => setProfile(data))
-      .catch(() => setProfError("프로필을 불러오지 못했습니다."));
+      .then((data) => {
+        setProfile(data);
+        setProfileLoading(false);
+      })
+      .catch(() => {
+        setProfError("프로필을 불러오지 못했습니다.");
+        setProfileLoading(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -128,20 +136,42 @@ export default function CheckPage() {
       return;
     }
 
+    // 프로필이 아직 로드되지 않았으면 로딩이 끝날 때까지 기다린다.
+    // 이미 로딩 중이면 응답을 기다리고, 로딩이 끝났으면 즉시 사용한다.
+    // setProfile은 비동기 상태 업데이트이므로, 방금 가져온 데이터를 로컬 변수에
+    // 함께 담아두어야 이후 요청 본문에 반영할 수 있다.
+    let activeProfile: Record<string, string | null> | null = profile;
+    if (profileLoading) {
+      try {
+        const r = await fetch(`${base}/api/onboarding/progress`, {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        });
+        const data = await r.json();
+        setProfile(data);
+        activeProfile = data;
+      } catch {
+        setProfError("프로필을 불러오지 못했습니다.");
+      }
+    }
+
+    const submittedText = notice.trim();
+    setSubmittedNotice(submittedText);
+
     const userMsg = notice;
     setMessages((m) => [...m, { role: "user", content: userMsg }]);
 
     try {
       const body: Record<string, unknown> = { notice_content: notice };
-      if (profile) {
-        body.dob = profile.dob ?? null;
-        body.region = profile.region ?? null;
-        body.residence_duration = profile.residence_duration ?? null;
-        body.housing_status = profile.housing_status ?? null;
-        body.marital_status = profile.marital_status ?? null;
-        body.income_info = profile.income_info ?? null;
-        body.asset_info = profile.asset_info ?? null;
-        body.car_value = profile.car_value ?? null;
+      if (activeProfile) {
+        body.dob = activeProfile.dob ?? null;
+        body.region = activeProfile.region ?? null;
+        body.residence_duration = activeProfile.residence_duration ?? null;
+        body.housing_status = activeProfile.housing_status ?? null;
+        body.marital_status = activeProfile.marital_status ?? null;
+        body.income_info = activeProfile.income_info ?? null;
+        body.asset_info = activeProfile.asset_info ?? null;
+        body.car_value = activeProfile.car_value ?? null;
       }
 
       const res = await fetch(`${base}/api/chat/session`, {
@@ -198,7 +228,7 @@ export default function CheckPage() {
 
         const assistantText = [
           labelText(checked.result),
-          checked.summary ? "\n" + checked.summary : "",
+          checked.summary ? "\n" + checked.summary.replace(/\*\*/g, '').trim() : "",
           checked.details.length > 0
             ? "\n\n자격조건 대조\n" +
               checked.details
@@ -214,7 +244,7 @@ export default function CheckPage() {
 
         setMessages((m) => [...m, { role: "assistant", content: assistantText }]);
       } else {
-        setMessages((m) => [...m, { role: "assistant", content: data.content ?? "" }]);
+        setMessages((m) => [...m, { role: "assistant", content: (data.content ?? "").replace(/\*\*/g, '') }]);
         setNoticePlaceholder("Solar의 질문에 답하고 Ctrl+Enter로 보내세요.");
       }
     } catch {
@@ -240,6 +270,11 @@ export default function CheckPage() {
     }
 
     const userMsg = text;
+
+    const existing = submittedNotice.trim();
+    if (!existing) {
+      setSubmittedNotice(text.trim());
+    }
     setMessages((m) => [...m, { role: "user", content: userMsg }]);
 
     try {
@@ -297,7 +332,7 @@ export default function CheckPage() {
 
         const assistantText = [
           labelText(checked.result),
-          checked.summary ? "\n" + checked.summary : "",
+          checked.summary ? "\n" + checked.summary.replace(/\*\*/g, '').trim() : "",
           checked.details.length > 0
             ? "\n\n자격조건 대조\n" +
               checked.details
@@ -314,7 +349,7 @@ export default function CheckPage() {
         setMessages((m) => [...m, { role: "assistant", content: assistantText }]);
         setSessionId(null);
       } else {
-        setMessages((m) => [...m, { role: "assistant", content: data.content ?? "" }]);
+        setMessages((m) => [...m, { role: "assistant", content: (data.content ?? "").replace(/\*\*/g, '') }]);
         setNoticePlaceholder("Solar의 질문에 답하고 Ctrl+Enter로 보내세요.");
       }
     } catch {
@@ -359,6 +394,7 @@ export default function CheckPage() {
 
   const resetCheck = () => {
     setNotice("");
+    setSubmittedNotice("");
     setMessages([]);
     setLoading(false);
     setSessionId(null);
@@ -545,7 +581,7 @@ export default function CheckPage() {
             <div className="mt-2 flex justify-end">
               <button
                 type="submit"
-                disabled={loading || !notice.trim()}
+                disabled={loading || profileLoading || !notice.trim()}
                 className="rounded-lg bg-zinc-900 px-5 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-zinc-800 disabled:opacity-50"
               >
                 {loading ? "응답 대기 중..." : sessionId ? "답변 보내기" : "전송 및 분석"}
@@ -556,13 +592,13 @@ export default function CheckPage() {
 
         <main className="flex flex-col w-[60%] border-l border-zinc-200 bg-zinc-50">
           <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
-            {!notice.trim() && !result && (
+            {!submittedNotice.trim() && !result && (
               <div className="rounded-xl border border-dashed border-zinc-300 bg-white px-5 py-8 text-center text-sm text-zinc-600">
                 먼저 공고를 올려 주세요. 왼쪽 채팅창에 공고 내용을 붙여넣거나 파일을 올리면, 오른쪽에 공고 정보와 판정 결과가 표시됩니다.
               </div>
             )}
 
-            {notice.trim() && (
+            {submittedNotice.trim() && (
               <>
                 {/* 1. 공고 헤더 카드 */}
                 <section className="rounded-xl border border-zinc-200 bg-white shadow-sm p-5 space-y-3">
@@ -571,11 +607,11 @@ export default function CheckPage() {
                   </div>
                   <div className="space-y-2">
                     <h3 className="text-lg font-semibold text-zinc-900 leading-snug">
-                      {notice.slice(0, 80)}{notice.length > 80 ? '…' : ''}
+                      {submittedNotice.slice(0, 80)}{submittedNotice.length > 80 ? '…' : ''}
                     </h3>
                     <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
                       <span>입력 방식: 직접 입력</span>
-                      <span>글자 수: {notice.length}자</span>
+                      <span>글자 수: {submittedNotice.length}자</span>
                     </div>
                   </div>
                   <div className="rounded-lg border border-dashed border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-500">
@@ -692,9 +728,11 @@ export default function CheckPage() {
                     )}
                   </div>
                   {result.summary ? (
-                    <p className="text-sm text-zinc-600 leading-relaxed">{result.summary.replace(/\*\*/g, '')}</p>
+                    <p className="text-sm text-zinc-600 leading-relaxed">
+                      {result.summary.replace(/\*\*/g, '').trim() || '요약 정보가 제공되지 않았습니다.'}
+                    </p>
                   ) : (
-                    <p className="text-sm text-zinc-500">자격조건 요약을 보려면 Solar 판정이 필요합니다.</p>
+                    <p className="text-sm text-zinc-500">요약 정보가 제공되지 않았습니다.</p>
                   )}
                 </section>
 
@@ -709,7 +747,7 @@ export default function CheckPage() {
 
                   <div className={`rounded-xl border p-5 ${badgeClass(result.result)}`}>
                     <div className="text-lg font-semibold">{labelText(result.result)}</div>
-                    {result.summary && <p className="mt-2 text-zinc-800">{result.summary}</p>}
+                    {result.summary && <p className="mt-2 text-zinc-800">{result.summary.replace(/\*\*/g, '')}</p>}
                   </div>
 
                   {/* 자격 조건 대조표 */}
