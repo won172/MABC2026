@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>청년주택 신청자격 판정 서비스</title>
+  <style>
+    :root {
+      --bg: #f5f5f5;
+      --card-bg: #ffffff;
+      --text: #212121;
+      --text-muted: #666666;
+      --border: #e0e0e0;
+      --primary: #1565c0;
+      --primary-light: #e3f2fd;
+      --eligible: #2e7d32;
+      --ineligible: #c62828;
+      --needs-review: #f9a825;
+      --space-sm: 8px;
+      --space-md: 16px;
+      --space-lg: 24px;
+      --radius: 8px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: var(--space-md);
+    }
+    .container { max-width: 800px; margin: 0 auto; }
+    header { text-align: center; margin-bottom: var(--space-lg); }
+    h1 { font-size: 1.5rem; }
+    .subtitle { color: var(--text-muted); font-size: 0.9rem; margin-top: var(--space-sm); }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: var(--space-md);
+      margin-bottom: var(--space-md);
+    }
+    .card-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: var(--space-sm);
+    }
+    textarea, input[type="text"], input[type="number"], select {
+      width: 100%;
+      padding: var(--space-sm) var(--space-md);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 1rem;
+      font-family: inherit;
+      margin-bottom: var(--space-sm);
+    }
+    textarea { min-height: 120px; resize: vertical; }
+    .form-row { margin-bottom: var(--space-md); }
+    .form-label { display: block; font-weight: 500; margin-bottom: var(--space-sm); font-size: 0.9rem; }
+    .form-hint { font-size: 0.8rem; color: var(--text-muted); margin-top: var(--space-xs); }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md); }
+    @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }
+    button.btn {
+      display: inline-block;
+      padding: var(--space-sm) var(--space-lg);
+      border: none;
+      border-radius: var(--radius);
+      font-size: 1rem;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.2s;
+    }
+    button.btn-primary { background: var(--primary); color: white; }
+    button.btn-primary:hover { background: #0d47a1; }
+    button.btn-secondary { background: var(--border); color: var(--text); }
+    button.btn-secondary:hover { background: #ccc; }
+    button.btn-danger { background: var(--ineligible); color: white; }
+    button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .actions { display: flex; gap: var(--space-sm); flex-wrap: wrap; margin-top: var(--space-md); }
+    .result { margin-top: var(--space-lg); }
+    .result-badge {
+      display: inline-block;
+      padding: var(--space-sm) var(--space-lg);
+      border-radius: var(--radius);
+      font-weight: 700;
+      font-size: 1.2rem;
+      margin-bottom: var(--space-md);
+    }
+    .badge-eligible { background: #e8f5e9; color: var(--eligible); }
+    .badge-ineligible { background: #ffebee; color: var(--ineligible); }
+    .badge-needs-review { background: #fff8e1; color: var(--needs-review); }
+    .summary { font-size: 1.1rem; margin-bottom: var(--space-md); }
+    .rank-card { background: var(--primary-light); padding: var(--space-md); border-radius: var(--radius); margin-bottom: var(--space-md); }
+    .rank-label { font-size: 0.8rem; color: var(--text-muted); }
+    .rank-value { font-size: 1.2rem; font-weight: 600; margin-top: var(--space-xs); }
+    table { width: 100%; border-collapse: collapse; margin-top: var(--space-md); font-size: 0.9rem; }
+    th, td { padding: var(--space-sm) var(--space-md); text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: #fafafa; font-weight: 600; }
+    .result-met { color: var(--eligible); font-weight: 600; }
+    .result-not-met { color: var(--ineligible); font-weight: 600; }
+    .result-needs-review { color: var(--needs-review); font-weight: 600; }
+    .result-unverified { color: var(--text-muted); }
+    .judgment-summary { background: #fafafa; padding: var(--space-md); border-radius: var(--radius); margin-top: var(--space-md); }
+    .notice { font-size: 0.85rem; color: var(--text-muted); margin-top: var(--space-md); padding: var(--space-sm); background: #f5f5f5; border-radius: var(--radius); }
+    .notice strong { color: var(--text); }
+    .hidden { display: none; }
+    .loading { text-align: center; padding: var(--space-lg); color: var(--text-muted); }
+    .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: var(--space-sm); vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error { background: #ffebee; color: var(--ineligible); padding: var(--space-md); border-radius: var(--radius); margin-bottom: var(--space-md); }
+    .profile-bar { display: flex; gap: var(--space-sm); align-items: center; margin-bottom: var(--space-md); flex-wrap: wrap; }
+    .profile-bar .btn { font-size: 0.85rem; padding: 4px 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>청년주택 신청자격 판정 서비스</h1>
+      <p class="subtitle">공고문과 내 조건을 입력하면 신청 가능 여부·순위·자격 판별을 바로 확인합니다.</p>
+    </header>
+
+    <!-- 프로필 바 -->
+    <div class="card">
+      <div class="card-label">내 조건 프로필</div>
+      <div class="profile-bar">
+        <button class="btn btn-secondary" id="load-profile-btn">저장된 조건 불러오기</button>
+        <button class="btn btn-secondary" id="save-profile-btn">현재 입력 저장</button>
+        <button class="btn btn-danger" id="clear-profile-btn">프로필 초기화</button>
+        <span style="font-size:0.85rem;color:var(--text-muted);margin-left:auto;" id="profile-status">저장된 프로필 없음</span>
+      </div>
+    </div>
+
+    <!-- 입력 카드 -->
+    <div class="card" id="input-card">
+      <div class="card-label">1. 공고 정보</div>
+      <div class="form-row">
+        <label class="form-label" for="notice-title">공고명</label>
+        <input type="text" id="notice-title" placeholder="예: 서울리츠 청년주택 모집공고">
+      </div>
+      <div class="form-row">
+        <label class="form-label" for="notice-content">공고문 내용 (전체 복사해서 붙여넣기)</label>
+        <textarea id="notice-content" placeholder="모집대상, 신청계층, 나이, 소득, 자산, 거주조건, 신청기간 등 공고 전문을 붙여넣으세요."></textarea>
+      </div>
+
+      <div class="card-label" style="margin-top:var(--space-lg);">2. 내 조건</div>
+      <div class="form-grid">
+        <div class="form-row">
+          <label class="form-label" for="dob">생년월일 (또는 나이)</label>
+          <input type="text" id="dob" placeholder="예: 1995-03-15 또는 29세">
+          <div class="form-hint">공고 기준일 현재 나이로 판정합니다.</div>
+        </div>
+        <div class="form-row">
+          <label class="form-label" for="region">거주지역</label>
+          <input type="text" id="region" placeholder="예: 서울특별시">
+        </div>
+        <div class="form-row">
+          <label class="form-label" for="residence-duration">거주기간</label>
+          <input type="text" id="residence-duration" placeholder="예: 2년 이상 계속 거주">
+        </div>
+        <div class="form-row">
+          <label class="form-label" for="housing-status">무주택 여부</label>
+          <select id="housing-status">
+            <option value="">선택하세요</option>
+            <option value="무주택">무주택</option>
+            <option value="주택 보유">주택 보유</option>
+            <option value="모름">모름</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label class="form-label" for="marital-status">혼인 여부</label>
+          <select id="marital-status">
+            <option value="">선택하세요</option>
+            <option value="미혼">미혼</option>
+            <option value="기혼">기혼</option>
+            <option value="예비신혼부부">예비신혼부부</option>
+            <option value="모름">모름</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label class="form-label" for="household">가구원 수 / 가구 구성</label>
+          <input type="text" id="household" placeholder="예: 본인 1인, 또는 본인+부모">
+        </div>
+        <div class="form-row">
+          <label class="form-label" for="income">월평균소득 (본인)</label>
+          <input type="text" id="income" placeholder="예: 240만원">
+          <div class="form-hint">공고 기준과 다를 수 있으니 확인 필요. 단순 월급과 다를 수 있습니다.</div>
+        </div>
+        <div class="form-row">
+          <label class="form-label" for="parent-income">부모님 소득 (순위 판단 시 필요)</label>
+          <input type="text" id="parent-income" placeholder="예: 순위 판단에 필요한 경우 입력">
+        </div>
+        <div class="form-row">
+          <label class="form-label" for="asset">총자산</label>
+          <input type="text" id="asset" placeholder="예: 1억 5천만원">
+        </div>
+        <div class="form-row">
+          <label class="form-label" for="car-value">자동차 가액</label>
+          <input type="text" id="car-value" placeholder="예: 1,500만원">
+        </div>
+        <div class="form-row">
+          <label class="form-label" for="applicant-type">신청계층 (해당되는 것)</label>
+          <select id="applicant-type">
+            <option value="">선택하세요</option>
+            <option value="청년">청년</option>
+            <option value="대학생">대학생</option>
+            <option value="취업준비생">취업준비생</option>
+            <option value="사회초년생">사회초년생</option>
+            <option value="신혼부부">신혼부부</option>
+            <option value="예비신혼부부">예비신혼부부</option>
+            <option value="모름">모르겠음</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label class="form-label" for="welfare-status">기초수급/차상위 여부</label>
+          <select id="welfare-status">
+            <option value="">선택하세요</option>
+            <option value="기초생활수급자">기초생활수급자</option>
+            <option value="차상위">차상위</option>
+            <option value="해당 없음">해당 없음</option>
+            <option value="모름">모름</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-primary" id="submit-btn">판정 요청</button>
+        <button class="btn btn-secondary" id="clear-btn">입력 초기화</button>
+      </div>
+      <div id="error-msg" class="error hidden"></div>
+    </div>
+
+    <!-- 로딩 -->
+    <div id="loading" class="card loading hidden">
+      <div class="spinner"></div>
+      <span>판정에 필요한 정보를 분석 중입니다…</span>
+    </div>
+
+    <!-- 결과 카드 -->
+    <div id="result-card" class="card result hidden">
+      <div id="result-badge" class="result-badge"></div>
+      <div id="result-summary" class="summary"></div>
+      <div id="result-rank" class="rank-card hidden">
+        <div class="rank-label">나의 순위 (Solar가 사용자 정보로 판단한 가장 높은 순위)</div>
+        <div class="rank-value" id="rank-value"></div>
+      </div>
+      <div id="result-applicant-type" class="rank-card hidden" style="background:#f3e5f5;">
+        <div class="rank-label">나의 신청계층 (Solar가 공고 요건으로 판단한 신청계층)</div>
+        <div class="rank-value" id="applicant-type-value"></div>
+      </div>
+
+      <div class="judgment-summary">
+        <div style="font-weight:600;margin-bottom:var(--space-sm);">자격조건 대조</div>
+        <table id="result-table">
+          <thead>
+            <tr>
+              <th style="width:22%">조건</th>
+              <th style="width:30%">공고 기준</th>
+              <th style="width:26%">내 조건</th>
+              <th style="width:22%">판정</th>
+            </tr>
+          </thead>
+          <tbody id="result-table-body"></tbody>
+        </table>
+      </div>
+
+      <div id="result-basis" class="judgment-summary" style="margin-top:var(--space-md);">
+        <div style="font-weight:600;margin-bottom:var(--space-sm);">판단 근거</div>
+        <div id="basis-content"></div>
+      </div>
+
+      <div id="result-checklist" class="judgment-summary" style="margin-top:var(--space-md);">
+        <div style="font-weight:600;margin-bottom:var(--space-sm);">신청 전 확인할 것</div>
+        <ul id="checklist-content" style="margin-left:1.2rem;line-height:1.8;"></ul>
+      </div>
+
+      <div class="notice">
+        <strong>시행기관 심사 안내</strong><br/>
+        이 판정은 공고문 근거로 한 1차 확인이며, 최종 입주자격은 시행기관의 심사를 통해 결정됩니다.<br/>
+        신청 전 공고 원본과 최신 정정공고를 다시 확인해 주세요.
+      </div>
+
+      <div class="actions" style="margin-top:var(--space-md);">
+        <button class="btn btn-primary" id="new-judgment-btn">새 공고로 판정 시작하기</button>
+      </div>
+    </div>
+
+    <!-- 최초 안내 (저장값 없을 때) -->
+    <div id="first-visit-guide" class="card">
+      <div class="card-label">처음 오셨나요?</div>
+      <p style="font-size:0.95rem;color:var(--text-muted);">
+        위 카드에서 <strong>공고명</strong>과 <strong>공고문 내용</strong>을 붙여넣고, <strong>내 조건</strong>을 채운 뒤 <strong>판정 요청</strong> 버튼을 누르세요.
+        입력한 조건은 브라우저에 저장되어 다음엔 다시 입력하지 않아도 됩니다. (저장값이 없는 첫 방문 기준입니다.)
+      </p>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      'use strict';
+
+      var STORAGE_KEY = 'youth-housing-profile-v1';
+
+      // ---- DOM refs ----
+      var $ = function(s) { return document.querySelector(s); };
+      var noticeTitle = $('#notice-title');
+      var noticeContent = $('#notice-content');
+      var dob = $('#dob');
+      var region = $('#region');
+      var residenceDuration = $('#residence-duration');
+      var housingStatus = $('#housing-status');
+      var maritalStatus = $('#marital-status');
+      var household = $('#household');
+      var income = $('#income');
+      var parentIncome = $('#parent-income');
+      var asset = $('#asset');
+      var carValue = $('#car-value');
+      var applicantType = $('#applicant-type');
+      var welfareStatus = $('#welfare-status');
+      var submitBtn = $('#submit-btn');
+      var clearBtn = $('#clear-btn');
+      var loadProfileBtn = $('#load-profile-btn');
+      var saveProfileBtn = $('#save-profile-btn');
+      var clearProfileBtn = $('#clear-profile-btn');
+      var profileStatus = $('#profile-status');
+      var errorMsg = $('#error-msg');
+      var loading = $('#loading');
+      var resultCard = $('#result-card');
+      var resultBadge = $('#result-badge');
+      var resultSummary = $('#result-summary');
+      var resultRank = $('#result-rank');
+      var rankValue = $('#rank-value');
+      var resultApplicantType = $('#result-applicant-type');
+      var applicantTypeValue = $('#applicant-type-value');
+      var resultTableBody = $('#result-table-body');
+      var resultBasis = $('#result-basis');
+      var basisContent = $('#basis-content');
+      var resultChecklist = $('#result-checklist');
+      var checklistContent = $('#checklist-content');
+      var newJudgmentBtn = $('#new-judgment-btn');
+      var firstVisitGuide = $('#first-visit-guide');
+
+      // ---- 프로필 (localStorage) ----
+      function getProfile() {
+        try {
+          var raw = localStorage.getItem(STORAGE_KEY);
+          return raw ? JSON.parse(raw) : null;
+        } catch (e) { return null; }
+      }
+
+      function saveProfile(profile) {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
+          profileStatus.textContent = '프로필 저장됨';
+        } catch (e) {
+          profileStatus.textContent = '저장 실패 (localStorage 불가)';
+        }
+      }
+
+      function clearProfile() {
+        try {
+          localStorage.removeItem(STORAGE_KEY);
+          profileStatus.textContent = '프로필 초기화됨';
+        } catch (e) {
+          profileStatus.textContent = '초기화 실패';
+        }
+      }
+
+      function readForm() {
+        return {
+          noticeTitle: noticeTitle.value.trim(),
+          noticeContent: noticeContent.value.trim(),
+          dob: dob.value.trim(),
+          region: region.value.trim(),
+          residenceDuration: residenceDuration.value.trim(),
+          housingStatus: housingStatus.value,
+          maritalStatus: maritalStatus.value,
+          household: household.value.trim(),
+          income: income.value.trim(),
+          parentIncome: parentIncome.value.trim(),
+          asset: asset.value.trim(),
+          carValue: carValue.value.trim(),
+          applicantType: applicantType.value,
+          welfareStatus: welfareStatus.value,
+        };
+      }
+
+      function fillForm(profile) {
+        if (!profile) return;
+        if (profile.noticeTitle) noticeTitle.value = profile.noticeTitle;
+        if (profile.noticeContent) noticeContent.value = profile.noticeContent;
+        if (profile.dob) dob.value = profile.dob;
+        if (profile.region) region.value = profile.region;
+        if (profile.residenceDuration) residenceDuration.value = profile.residenceDuration;
+        if (profile.housingStatus) housingStatus.value = profile.housingStatus;
+        if (profile.maritalStatus) maritalStatus.value = profile.maritalStatus;
+        if (profile.household) household.value = profile.household;
+        if (profile.income) income.value = profile.income;
+        if (profile.parentIncome) parentIncome.value = profile.parentIncome;
+        if (profile.asset) asset.value = profile.asset;
+        if (profile.carValue) carValue.value = profile.carValue;
+        if (profile.applicantType) applicantType.value = profile.applicantType;
+        if (profile.welfareStatus) welfareStatus.value = profile.welfareStatus;
+      }
+
+      function collectProfileFromForm() {
+        var f = readForm();
+        return {
+          noticeTitle: f.noticeTitle,
+          noticeContent: f.noticeContent,
+          dob: f.dob,
+          region: f.region,
+          residenceDuration: f.residenceDuration,
+          housingStatus: f.housingStatus,
+          maritalStatus: f.maritalStatus,
+          household: f.household,
+          income: f.income,
+          parentIncome: f.parentIncome,
+          asset: f.asset,
+          carValue: f.carValue,
+          applicantType: f.applicantType,
+          welfareStatus: f.welfareStatus,
+        };
+      }
+
+      function updateProfileStatus() {
+        var p = getProfile();
+        profileStatus.textContent = p ? '저장된 프로필 있음' : '저장된 프로필 없음';
+      }
+
+      // ---- 판정 요청 (실제 서비스에서는 /api 호출) ----
+      function requestJudgment(formData) {
+        // MVP 스켈레톤: 지금은 /api 서버가 없으므로 클라이언트 사이드에서 미리보기 판정을 보여주되,
+        // 실제로는 /api/eligibility로 POST해야 함을 안내한다.
+        // 저장소/환경변수가 없는 환경에서도 시크릿 창 첫 접속 시 화면이 보이도록 클라이언트 판정을 임시로 제공한다.
+        // 추후 백엔드가 붙으면 이 함수만 교체한다.
+        return analyzeClientSide(formData);
+      }
+
+      // ---- 클라이언트 사이드 임시 분석 (백엔드 없을 때 화면 확인용) ----
+      // 이 함수는 PRD 범위를 벗어나지 않는 선에서 "화면이 어떻게 보이는가"를 보여주기 위한 임시 구현이다.
+      // 실제 판정은 Solar + 예선 스킬이 해야 하며, 여기서는 규칙 기반으로 최소 반응만 보여준다.
+      function analyzeClientSide(data) {
+        var errors = validateInput(data);
+        if (errors.length > 0) {
+          return { ok: false, errors: errors };
+        }
+
+        // 공고문에 "청년" 명시적 대상 언급이 없으면 범위 밖으로 볼 수 있음
+        var noticeLower = data.noticeContent.toLowerCase();
+        var isYouthRelated = noticeLower.includes('청년') || noticeLower.includes('만 19') || noticeLower.includes('만19')
+          || noticeLower.includes('19세') || noticeLower.includes('39세') || noticeLower.includes('39세 이하')
+          || noticeLower.includes('무주택') || noticeLower.includes('소득') || noticeLower.includes('주거');
+
+        // 나이 파싱 시도
+        var age = parseAge(data.dob);
+        var isYouth = (age !== null && age >= 19 && age <= 39);
+
+        // 범위 밖: 청년이 아닌데 청년주택 판정 요구
+        if (!isYouthRelated) {
+          return {
+            ok: true,
+            result: 'out-of-scope',
+            summary: '이 공고는 청년주택 모집공고로 보기 어렵습니다. 청년주택 신청자격 판정은 청년이 대상이 되는 공고에만 사용할 수 있습니다.',
+            badgeClass: 'badge-needs-review',
+            badgeText: '🟡 범위 밖',
+            details: [],
+            basis: ['공고문에 청년주택 모집 대상 관련 내용이 확인되지 않습니다.'],
+            checklist: ['청년주택 모집공고인지 공고 원문에서 확인하세요.', '다른 유형의 주택 공고라면 이 서비스의 판정 대상이 아닙니다.'],
+            rank: null,
+            applicantType: null,
+          };
+        }
+
+        if (age === null) {
+          // 나이 정보 없음 -> 확인 필요
+          return {
+            ok: true,
+            result: 'needs-review',
+            summary: '나이를 확인할 수 없어 신청 가능 여부를 확정하기 어렵습니다. 생년월일을 입력하면 다시 판정합니다.',
+            badgeClass: 'badge-needs-review',
+            badgeText: '🟡 추가 확인 필요',
+            details: [
+              { condition: '나이', criteria: '공고 기준 확인 필요', user: '미입력', result: 'needs-review' },
+            ],
+            basis: ['생년월일이 입력되지 않아 나이 기준 충족 여부를 판단할 수 없습니다.'],
+            checklist: ['생년월일을 입력하세요.', '공고의 나이 기준(만 19세 이상 ~ 만 39세 이하 등)을 확인하세요.'],
+            rank: '순위 확인 필요',
+            applicantType: '신청계층 확인 필요',
+          };
+        }
+
+        if (!isYouth) {
+          // 청년이 아님 -> 범위 밖/신청 불가
+          return {
+            ok: true,
+            result: 'out-of-scope',
+            summary: '입력하신 생년월일 기준 나이가 청년 범위(만 19세~39세)에 해당하지 않아, 이 공고의 청년주택 신청자격 판정 대상이 아닙니다.',
+            badgeClass: 'badge-ineligible',
+            badgeText: '🔴 신청 불가 (범위 밖)',
+            details: [
+              { condition: '나이(신청 대상)', criteria: '공고에서 정한 청년층 해당 여부', user: age + '세 (청년 범위 외)', result: 'not-met' },
+            ],
+            basis: ['공고가 정한 청년층 나이 범위에 해당하지 않습니다. 이 판정은 청년주택 신청자격 대상자에 한정됩니다.'],
+            checklist: ['청년주택이 아닌 다른 주택 유형을 확인하세요.', '나이가 달라지면 재검토 가능합니다.'],
+            rank: null,
+            applicantType: null,
+          };
+        }
+
+        // 기본 충족 시뮬레이션: 나이 충족, 나머지 항목은 입력 여부에 따라 ⭕/⚠️/❌
+        var details = [];
+        details.push({
+          condition: '나이',
+          criteria: '공고 기준 (만 19세~39세 등)',
+          user: age + '세',
+          result: 'met',
+        });
+
+        if (data.housingStatus === '무주택') {
+          details.push({ condition: '무주택', criteria: '공고 기준 (무주택)', user: '무주택', result: 'met' });
+        } else if (data.housingStatus === '주택 보유') {
+          details.push({ condition: '무주택', criteria: '공고 기준 (무주택)', user: '주택 보유', result: 'not-met' });
+        } else {
+          details.push({ condition: '무주택', criteria: '공고 기준 (무주택)', user: '미입력/모름', result: 'needs-review' });
+        }
+
+        if (data.income) {
+          details.push({ condition: '소득', criteria: '공고 기준 확인 필요', user: data.income + ' (공고 기준과 대조 필요)', result: 'needs-review' });
+        } else {
+          details.push({ condition: '소득', criteria: '공고 기준 확인 필요', user: '미입력', result: 'needs-review' });
+        }
+
+        if (data.asset) {
+          details.push({ condition: '자산', criteria: '공고 기준 확인 필요', user: data.asset + ' (공고 기준과 대조 필요)', result: 'needs-review' });
+        } else {
+          details.push({ condition: '자산', criteria: '공고 기준 확인 필요', user: '미입력', result: 'needs-review' });
+        }
+
+        if (data.carValue) {
+          details.push({ condition: '자동차 가액', criteria: '공고 기준 확인 필요', user: data.carValue + ' (공고 기준과 대조 필요)', result: 'needs-review' });
+        } else {
+          details.push({ condition: '자동차 가액', criteria: '공고 기준 확인 필요', user: '미입력', result: 'needs-review' });
+        }
+
+        if (data.region) {
+          details.push({ condition: '거주지역', criteria: '공고 기준 확인 필요', user: data.region + ' (공고 기준과 대조 필요)', result: 'needs-review' });
+        } else {
+          details.push({ condition: '거주지역', criteria: '공고 기준 확인 필요', user: '미입력', result: 'needs-review' });
+        }
+
+        if (data.maritalStatus) {
+          details.push({ condition: '혼인/가구', criteria: '공고 기준 확인 필요', user: data.maritalStatus + (data.household ? ', ' + data.household : ''), result: 'needs-review' });
+        } else {
+          details.push({ condition: '혼인/가구', criteria: '공고 기준 확인 필요', user: '미입력', result: 'needs-review' });
+        }
+
+        // 순위 판단: 클라이언트 사이드에서는 공고에 순위 기준이 없으므로 "순위 확인 필요"로 표시
+        var rankText = '순위 확인 필요';
+        var rankDetail = '이 공고에는 1·2·3순위별 판정 기준이 명시되어 있지 않거나, 입력된 정보만으로는 순위를 판단할 수 없습니다. 공고에 순위별 소득·가구 기준이 있으면 다시 판정합니다.';
+
+        // 신청계층 판단
+        var applicantTypeText = data.applicantType && data.applicantType !== '모름' ? data.applicantType : '신청계층 확인 필요';
+        var applicantTypeDetail = data.applicantType && data.applicantType !== '모름'
+          ? '입력하신 신청계층 기준으로 대조했습니다. 공고가 여러 신청계층을 허용하면 Solar가 공고 요건으로 가장 유리한 계층을 판단합니다.'
+          : '신청계층이 명확하지 않아 공고 요건 대조에 제한이 있습니다.';
+
+        // 결과 판정: 미충족이 하나라도 있으면 ineligible, 확인 필요만 있으면 needs-review, 모두 met면 eligible
+        var hasNotMet = details.some(function(d) { return d.result === 'not-met'; });
+        var hasNeedsReview = details.some(function(d) { return d.result === 'needs-review'; });
+        var allMet = details.every(function(d) { return d.result === 'met'; });
+
+        var result;
+        var badgeText;
+        var badgeClass;
+        var summary;
+        var checklist;
+
+        if (hasNotMet) {
+          result = 'ineligible';
+          badgeText = '🔴 신청 불가';
+          badgeClass = 'badge-ineligible';
+          summary = '필수조건 중 미충족이 확인되었습니다. 아래 대조표에서 ❌ 미충족 조건을 확인하세요.';
+          checklist = [
+            '핵심 탈락조건을 확인하세요.',
+            '사용자 조건이 달라지면 재검토 가능합니다.',
+            '다른 공고를 확인할 때 이 공고의 조건을 그대로 적용하지 마세요.',
+          ];
+        } else if (hasNeedsReview) {
+          result = 'needs-review';
+          badgeText = '🟡 추가 확인 필요';
+          badgeClass = 'badge-needs-review';
+          summary = '일부 조건을 확인할 수 없어 신청 가능 여부를 확정하기 어렵습니다. 아래 확인 필요 항목을 보완하면 판정이 완료됩니다.';
+          checklist = [
+            '확인 필요 항목의 값을 공고 기준에 맞게 확인하세요.',
+            '소득·자산은 공고 산정방식과 다를 수 있으니 확인 경로를 참고하세요.',
+            '공고 원문에서 정확한 기준·기준시점을 확인하세요.',
+          ];
+        } else {
+          result = 'eligible';
+          badgeText = '🟢 신청 가능';
+          badgeClass = 'badge-eligible';
+          summary = '입력한 정보 기준 모든 필수조건을 충족합니다. 실제 신청 전 공고 원문과 정정공고를 다시 확인하세요.';
+          checklist = [
+            '신청기간 내인지 확인하세요.',
+            '공고 원문과 최신 정정공고를 확인하세요.',
+            '필요 서류·정보를 미리 준비하세요.',
+            '최종 입주자격은 시행기관 심사로 결정됩니다.',
+          ];
+        }
+
+        return {
+          ok: true,
+          result: result,
+          summary: summary,
+          badgeClass: badgeClass,
+          badgeText: badgeText,
+          details: details,
+          basis: [
+            '나이는 입력된 생년월일로 계산했습니다.',
+            '무주택 여부는 선택값을 그대로 반영했습니다.',
+            '소득·자산·자동차 가액은 공고 기준과 대조하지 않은 임시값입니다.',
+            rankDetail,
+            applicantTypeDetail,
+          ],
+          checklist: checklist,
+          rank: rankText,
+          applicantType: applicantTypeText,
+        };
+      }
+
+      function validateInput(data) {
+        var errors = [];
+        if (!data.noticeTitle) errors.push('공고명을 입력하세요.');
+        if (!data.noticeContent) errors.push('공고문 내용을 붙여넣으세요.');
+        return errors;
+      }
+
+      function parseAge(dobStr) {
+        if (!dobStr) return null;
+        // 생년월일 형태 yyyy-mm-dd 시도
+        var m = dobStr.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
+        if (m) {
+          var y = parseInt(m[1], 10), mo = parseInt(m[2], 10), d = parseInt(m[3], 10);
+          var now = new Date();
+          var birth = new Date(y, mo - 1, d);
+          var age = now.getFullYear() - birth.getFullYear();
+          var mDiff = now.getMonth() - birth.getMonth();
+          if (mDiff < 0 || (mDiff === 0 && now.getDate() < birth.getDate())) age -= 1;
+          return age;
+        }
+        // "29세" 형태
+        m = dobStr.match(/(\d+)세/i);
+        if (m) return parseInt(m[1], 10);
+        // "1995" 연도만
+        m = dobStr.match(/^(\d{4})$/);
+        if (m) {
+          var y2 = parseInt(m[1], 10);
+          return new Date().getFullYear() - y2 - 1;
+        }
+        return null;
+      }
+
+      // ---- 렌더링 ----
+      function renderResult(res) {
+        loading.classList.add('hidden');
+        resultCard.classList.remove('hidden');
+
+        resultBadge.textContent = res.badgeText;
+        resultBadge.className = 'result-badge ' + res.badgeClass;
+        resultSummary.textContent = res.summary;
+
+        // 순위
+        if (res.rank) {
+          resultRank.classList.remove('hidden');
+          rankValue.textContent = res.rank;
+        } else {
+          resultRank.classList.add('hidden');
+        }
+
+        // 신청계층
+        if (res.applicantType) {
+          resultApplicantType.classList.remove('hidden');
+          applicantTypeValue.textContent = res.applicantType;
+        } else {
+          resultApplicantType.classList.add('hidden');
+        }
+
+        // 대조표
+        resultTableBody.innerHTML = '';
+        if (res.details && res.details.length > 0) {
+          res.details.forEach(function(d) {
+            var tr = document.createElement('tr');
+            var resultClass = d.result === 'met' ? 'result-met'
+              : d.result === 'not-met' ? 'result-not-met'
+              : d.result === 'needs-review' ? 'result-needs-review'
+              : 'result-unverified';
+            var resultLabel = d.result === 'met' ? '⭕ 충족'
+              : d.result === 'not-met' ? '❌ 미충족'
+              : d.result === 'needs-review' ? '⚠️ 확인 필요'
+              : '확인되지 않음';
+            tr.innerHTML =
+              '<td>' + escapeHtml(d.condition) + '</td>' +
+              '<td>' + escapeHtml(d.criteria) + '</td>' +
+              '<td>' + escapeHtml(d.user) + '</td>' +
+              '<td class="' + resultClass + '">' + resultLabel + '</td>';
+            resultTableBody.appendChild(tr);
+          });
+        } else {
+          var emptyRow = document.createElement('tr');
+          emptyRow.innerHTML = '<td colspan="4" style="color:var(--text-muted);text-align:center;">대조 결과가 없습니다.</td>';
+          resultTableBody.appendChild(emptyRow);
+        }
+
+        // 판단 근거
+        basisContent.innerHTML = (res.basis || []).map(function(b) { return '• ' + escapeHtml(b) + '<br/>'; }).join('');
+
+        // 신청 전 확인할 것
+        checklistContent.innerHTML = (res.checklist || []).map(function(c) { return '<li>' + escapeHtml(c) + '</li>'; }).join('');
+
+        firstVisitGuide.classList.add('hidden');
+      }
+
+      function showError(msg) {
+        errorMsg.textContent = msg;
+        errorMsg.classList.remove('hidden');
+      }
+
+      function clearError() {
+        errorMsg.classList.add('hidden');
+      }
+
+      function escapeHtml(str) {
+        if (!str) return '';
+        return str.replace(/[&<>"']/g, function(c) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+      }
+
+      // ---- 이벤트 ----
+      submitBtn.addEventListener('click', function() {
+        clearError();
+        var data = readForm();
+        var errors = validateInput(data);
+        if (errors.length > 0) {
+          showError(errors.join('<br/>'));
+          return;
+        }
+
+        loading.classList.remove('hidden');
+        resultCard.classList.add('hidden');
+
+        // 실제 서비스에서는 아래처럼 /api 호출:
+        // fetch('/api/eligibility', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ ...data }) })
+        // 여기서는 클라이언트 사이드 임시 판정:
+        setTimeout(function() {
+          var res = requestJudgment(data);
+          if (!res.ok) {
+            loading.classList.add('hidden');
+            showError(res.errors.join('<br/>'));
+            return;
+          }
+          renderResult(res);
+        }, 400);
+      });
+
+      clearBtn.addEventListener('click', function() {
+        noticeTitle.value = '';
+        noticeContent.value = '';
+        dob.value = '';
+        region.value = '';
+        residenceDuration.value = '';
+        housingStatus.value = '';
+        maritalStatus.value = '';
+        household.value = '';
+        income.value = '';
+        parentIncome.value = '';
+        asset.value = '';
+        carValue.value = '';
+        applicantType.value = '';
+        welfareStatus.value = '';
+        clearError();
+        resultCard.classList.add('hidden');
+        loading.classList.add('hidden');
+        firstVisitGuide.classList.remove('hidden');
+      });
+
+      newJudgmentBtn.addEventListener('click', function() {
+        clearBtn.click();
+      });
+
+      loadProfileBtn.addEventListener('click', function() {
+        var p = getProfile();
+        if (p) {
+          fillForm(p);
+          updateProfileStatus();
+        } else {
+          profileStatus.textContent = '저장된 프로필이 없습니다.';
+        }
+      });
+
+      saveProfileBtn.addEventListener('click', function() {
+        var profile = collectProfileFromForm();
+        saveProfile(profile);
+        updateProfileStatus();
+      });
+
+      clearProfileBtn.addEventListener('click', function() {
+        clearProfile();
+        updateProfileStatus();
+      });
+
+      // 초기 상태
+      updateProfileStatus();
+      if (getProfile()) {
+        // 저장값이 있으면 불러오기 버튼을 누르도록 안내
+        profileStatus.textContent = '저장된 프로필 있음 — "저장된 조건 불러오기" 버튼으로 로드';
+      }
+    })();
+  </script>
+</body>
+</html>

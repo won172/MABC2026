@@ -11,7 +11,7 @@ import uuid
 import json
 import re
 import requests
-from datetime import datetime
+from datetime import datetime, date
 from typing import Any
 from html import unescape
 
@@ -75,10 +75,16 @@ def init_db():
             income_info TEXT,
             asset_info TEXT,
             car_value TEXT,
+            age INTEGER,
             onboarding_step INTEGER DEFAULT 1,
             notify_eligible BOOLEAN DEFAULT 0
         )
     """)
+    # 기존 DB에 age 컬럼이 없으면 추가 (안전 재실행용)
+    try:
+        cursor.execute("ALTER TABLE user_profiles ADD COLUMN age INTEGER")
+    except sqlite3.OperationalError:
+        pass
     
     # 공고 테이블 (샘플 데이터용)
     cursor.execute("""
@@ -299,11 +305,15 @@ async def index(request: Request):
     conn.close()
 
     if row and row["onboarding_step"] >= 5:
-        return templates.TemplateResponse("index.html", {
-            "request": request,
-            "user_id": user_id,
-            "notices": []
-        })
+        return templates.TemplateResponse(
+            request=request,
+            name="index.html",
+            context={
+                "request": request,
+                "user_id": user_id,
+                "notices": []
+            },
+        )
 
     profile = {
         "dob": row["dob"] if row else "",
@@ -317,16 +327,21 @@ async def index(request: Request):
         "notify_eligible": bool(row["notify_eligible"]) if row else False,
     }
 
-    response = templates.TemplateResponse("onboarding.html", {
-        "request": request,
-        "current_step": row["onboarding_step"] if row else 1,
-        "user_id": user_id,
-        "profile": profile,
-        "step_title": step_titles.get(row["onboarding_step"] if row else 1, ""),
-        "step_description": step_descriptions.get(row["onboarding_step"] if row else 1, ""),
-        "housing_status_label": housing_status_label,
-        "marital_status_label": marital_status_label,
-    })
+    response = templates.TemplateResponse(
+        request=request,
+        name="onboarding.html",
+        context={
+            "request": request,
+            "row": row,
+            "current_step": row["onboarding_step"] if row else 1,
+            "user_id": user_id,
+            "profile": profile,
+            "step_title": step_titles.get(row["onboarding_step"] if row else 1, ""),
+            "step_description": step_descriptions.get(row["onboarding_step"] if row else 1, ""),
+            "housing_status_label": housing_status_label,
+            "marital_status_label": marital_status_label,
+        },
+    )
     response.set_cookie(key="user_id", value=user_id, httponly=True, max_age=3600*24*30)
     return response
 
@@ -357,8 +372,9 @@ async def onboarding_step(request: Request, step: int):
     conn.close()
 
     response = templates.TemplateResponse(
-        "onboarding.html",
-        {
+        request=request,
+        name="onboarding.html",
+        context={
             "request": request,
             "current_step": step,
             "user_id": user_id,
@@ -391,9 +407,14 @@ async def save_onboarding_progress(request: Request, data: OnboardingProgress):
 
     set_clauses: list[str] = []
     values: list[Any] = []
+    age_val: Any = None
     if data.dob is not None and not _is_uncertain_answer(data.dob):
         set_clauses.append("dob = ?")
         values.append(data.dob)
+        age_val = calc_age_from_dob(data.dob)
+        if age_val is not None:
+            set_clauses.append("age = ?")
+            values.append(age_val)
     if data.region is not None and not _is_uncertain_answer(data.region):
         set_clauses.append("region = ?")
         values.append(data.region)
@@ -436,13 +457,13 @@ async def save_onboarding_progress(request: Request, data: OnboardingProgress):
         # 기존 행이 없으면 새로 삽입
         cursor.execute(
             """INSERT INTO user_profiles (
-                id, created_at, updated_at, dob, region, residence_duration,
+                id, created_at, updated_at, dob, age, region, residence_duration,
                 housing_status, marital_status, income_info, asset_info, car_value,
                 notify_eligible, onboarding_step
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 user_id, now, now,
-                data.dob, data.region, data.residence_duration,
+                data.dob, age_val, data.region, data.residence_duration,
                 data.housing_status, data.marital_status,
                 data.income_info, data.asset_info, data.car_value,
                 int(data.notify_eligible),
@@ -557,6 +578,72 @@ async def list_notices(request: Request):
 
     notices = [dict(row) for row in rows]
     return {"notices": notices}
+
+
+# === 파싱된 공고 데이터 (data/*.pdf.json) ===
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+
+
+def _load_parsed_notice_list() -> list[dict]:
+    """data/*.pdf.json 파일 목록에서 공고 메타데이터를 읽어 반환한다."""
+    if not os.path.isdir(_DATA_DIR):
+        return []
+    out: list[dict] = []
+    for fname in sorted(os.listdir(_DATA_DIR)):
+        if not fname.endswith(".pdf.json"):
+            continue
+        path = os.path.join(_DATA_DIR, fname)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        pages_text = data.get("pages_text")
+        if not isinstance(pages_text, list):
+            continue
+        full_text = "\n".join(str(x) for x in pages_text)
+        out.append({
+            "id": fname,
+            "title": data.get("original") or fname,
+            "pages": data.get("pages"),
+            "char_count": len(full_text),
+        })
+    return out
+
+
+@app.get("/api/parsed-notices")
+async def list_parsed_notices(request: Request):
+    """data/*.pdf.json에 저장된 파싱 공고 목록을 반환한다."""
+    notices = _load_parsed_notice_list()
+    return {"notices": notices}
+
+
+@app.get("/api/parsed-notices/{notice_id}")
+async def get_parsed_notice(request: Request, notice_id: str):
+    """data/*.pdf.json에서 특정 공고의 전체 텍스트를 반환한다."""
+    path = os.path.join(_DATA_DIR, notice_id)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="공고 데이터를 찾을 수 없습니다")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        raise HTTPException(status_code=500, detail="공고 데이터를 읽는 중 오류가 발생했습니다")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail="공고 데이터 형식이 올바르지 않습니다")
+    pages_text = data.get("pages_text")
+    if not isinstance(pages_text, list):
+        raise HTTPException(status_code=500, detail="공고 데이터 형식이 올바르지 않습니다")
+    full_text = "\n".join(str(x) for x in pages_text)
+    return {
+        "id": notice_id,
+        "title": data.get("original") or notice_id,
+        "pages": data.get("pages"),
+        "content": full_text,
+        "char_count": len(full_text),
+    }
 
 
 # === 파일 파싱 (Upstage Document Digitization) ===
@@ -1135,9 +1222,6 @@ def build_chat_messages(
         "- 최종 판정 단계: 스킬 파일의 9단계 출력 형식을 그대로 따른다. "
         "최종 판정(신청 가능 / 신청 불가 / 추가 확인 필요)을 가장 먼저 출력한다.\n"
         "- 위 규칙과 스킬 파일이 충돌하면 스킬을 따른다.\n"
-        "- 텍스트에서 물결표(~) 대신 하이픈(-)을 사용하라. "
-        "물결표는 프론트엔드 마크다운 렌더에서 취소선으로 표시되므로 응답 텍스트에 물결표를 넣지 않는다. "
-        '범위 표시에 "1990~2000" 대신 "1990-2000"을 쓰고, 근사치 표현도 "~3명" 대신 "-3명" 또는 "약 3명"으로 바꾼다.'
     )
     messages.append({"role": AS_USER, "content": "\n\n## 출력 규칙\n" + output_rules})
 
@@ -1148,7 +1232,7 @@ def call_solar(messages: list) -> str:
     """Solar Pro4에 메시지 리스트를 보내고 응답 텍스트를 반환한다.
 
     system/user/assistant 역할을 분리된 메시지로 전송하며,
-    reasoning=medium, temperature=0, max_tokens=8192, timeout=120을 사용한다.
+            reasoning_effort=none, temperature=0, max_tokens=8192, timeout=120을 사용한다.
     고정 응답은 쓰지 않는다. 실제 호출이 실패하거나 키가 없으면 예외를 올린다(호출부가 처리).
     """
     if not SOLAR_API_KEY:
@@ -1159,7 +1243,7 @@ def call_solar(messages: list) -> str:
         "messages": messages,
         "max_tokens": 8192,
         "temperature": 0,
-        "reasoning_effort": "medium",
+        "reasoning_effort": "minimal",
     }
     headers = {
         "Authorization": f"Bearer {SOLAR_API_KEY}",
@@ -1207,68 +1291,9 @@ def is_final_judgment(text: str) -> bool:
     if not has_structure:
         return False
 
-    # 질문형 표현 탐지 (넓게)
-    question_indicators = [
-        # 존대 질문 종결어미
-        "알려주세요",
-        "알려주실 수 있나요",
-        "알려주실 수 있으신가요",
-        "확인 후 다시 알려주세요",
-        "확인해 주세요",
-        "확인해주세요",
-        "확인해주시고",
-        "회신해주세요",
-        "회신해 주세요",
-        "답변해주세요",
-        "답변해 주세요",
-        "입력해주세요",
-        "입력해 주세요",
-        "입력해주시고",
-        # 평어/해요체 질문 종결어미
-        "알려줘",
-        "입력해줘",
-        "확인해줘",
-        "답변해줘",
-        "몇년생",
-        "몇년 생",
-        "이에요",
-        "인가요",
-        "인가요?",
-        "인지",
-        "아닌지",
-        "알고 계신가요",
-        "알고 있습니까",
-        "아세요",
-        "아십니까",
-        "맞나요",
-        "맞습니까",
-        "맞는지",
-        "올까요",
-        "될까요",
-        "할까요",
-        # 사용자 정보를 요구하는 패턴
-        "생년월일을 알려주세요",
-        "거주 지역을 알려주세요",
-        "무주택 여부를 알려주세요",
-        "혼인 여부를 알려주세요",
-        "가구 구성을 알려주세요",
-        "월평균 소득을 알려주세요",
-        "소득을 알려주세요",
-        "자산을 알려주세요",
-        "차량가액을 알려주세요",
-        "차량 가액을 알려주세요",
-        "자동차 가액을 알려주세요",
-        # 물음표 질문 — 문장 끝에 물음표가 있으면 질문으로 간주.
-        # 단, 스킬 파일 본문이나 코드 샘플에 포함된 물음표는 여기선 걸리지 않도록
-        # 탐지 대상을 실제 응답 텍스트(스킬 프롬프트 제외)로 한정하지 못하므로,
-        # 물음표 단독 일정은 유지하고 아래 extract_question에서 보정한다.
-        "?",
-    ]
-    lower = text.lower()
-    for ind in question_indicators:
-        if ind in lower:
-            return False
-
+    # 판정 토큰 + 최종 출력 구조 마커가 모두 있으면,
+    # 응답 텍스트에 물음표가 섞여 있어도 최종 판정으로 본다.
+    # (Solar가 설명 중에 "~인가요?" 같은 표현을 포함할 수 있기 때문)
     return True
 
 
@@ -1588,6 +1613,24 @@ async def create_chat_session(request: Request, data: ChatSessionCreate):
     return response
 
 
+def calc_age_from_dob(dob: Optional[str]) -> Optional[int]:
+    """생년월일 문자열(YYYY-MM-DD)에서 오늘 기준 만 나이를 계산한다.
+
+    생일이 지나지 않았으면 1을 빼며, 파싱할 수 없거나 dob가비어 있으면 None을 반환한다.
+    """
+    if not dob:
+        return None
+    try:
+        birth = datetime.strptime(dob, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    today = date.today()
+    age = today.year - birth.year
+    if (today.month, today.day) < (birth.month, birth.day):
+        age -= 1
+    return age
+
+
 def _is_uncertain_answer(text: str) -> bool:
     """사용자가 명시적으로 '모르겠다'고 표현한 답변인지 확인한다.
 
@@ -1663,9 +1706,28 @@ async def send_chat_message(request: Request, data: ChatMessageCreate):
     # 다음 프롬프트의 '사용자 프로필' 블록에 미제공 대신 실제 값이 보이게 한다.
     if data.field_key:
         if _is_uncertain_answer(data.content):
-            # "모름", "아직 모르겠어요" 등은 프로필에 저장하지 않는다.
-            # DB와 in-memory 상태 모두 갱신하지 않는다.
-            pass
+            # "모름", "아직 모르겠어요" 등은 확정된 값이 아니므로
+            # 일반 값처럼 저장하지 않는다. 대신 '이미 모름으로 답변했음'을
+            # Solar가 인지할 수 있도록 센티넬을 저장해 재질문을 막는다.
+            # (SKILL.md 471줄: "모름"에는 한 번만 반응하고 같은 질문을 다시 하지 않는다.)
+            sentinel = f"⚠️ {data.content} (재질문 금지)"
+            field_map = {
+                "dob": "dob",
+                "region": "region",
+                "residence_duration": "residence_duration",
+                "housing_status": "housing_status",
+                "marital_status": "marital_status",
+                "income_info": "income_info",
+                "asset_info": "asset_info",
+                "car_value": "car_value",
+            }
+            db_key = field_map.get(data.field_key)
+            if db_key:
+                cursor.execute(
+                    f"UPDATE user_profiles SET {db_key} = ?, updated_at = ? WHERE id = ?",
+                    (sentinel, now, user_id),
+                )
+                user_profile[db_key] = sentinel
         else:
             field_map = {
                 "dob": "dob",
@@ -1709,12 +1771,14 @@ async def send_chat_message(request: Request, data: ChatMessageCreate):
         if _role == "assistant" and not _is_final:
             _assistant_exchanges += 1
     if _assistant_exchanges > MAX_QUESTION_TURNS:
-        history.append({"role": "user", "content": "\n\n## 강제 마무리\n질문을 멈추고 지금 최종 판정을 내려 주세요. 스킬 파일의 9단계 출력 형식을 그대로 사용하세요."})
         try:
             messages = build_chat_messages(
                 notice_text,
                 user_profile,
                 history=history,
+            )
+            messages.append(
+                {"role": "user", "content": "\n\n## 강제 마무리\n질문을 멈추고 지금 최종 판정을 내려 주세요. 스킬 파일의 9단계 출력 형식을 그대로 사용하세요."}
             )
             raw = call_solar(messages)
         except RuntimeError as exc:
@@ -1749,7 +1813,6 @@ async def send_chat_message(request: Request, data: ChatMessageCreate):
             )
         parsed = _parse_eligibility_result(raw)
         final = is_final_judgment(raw)
-        question_text = extract_question(raw) if not final else None
 
     if final:
         role = "assistant"

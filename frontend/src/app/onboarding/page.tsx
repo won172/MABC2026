@@ -1,11 +1,13 @@
 'use client';
 
 import { useState, useEffect, type FormEvent } from 'react';
+import { calcAgeFromDob } from './calcAgeFromDob';
 
 type Step = 1 | 2 | 3 | 4 | 5;
 
 interface Profile {
   dob: string;
+  age: number | null;
   region: string;
   residenceDuration: string;
   housingStatus: 'yes' | 'no' | 'unknown' | '';
@@ -35,6 +37,7 @@ export default function OnboardingPage() {
   const [step, setStep] = useState<Step>(1);
   const [profile, setProfile] = useState<Profile>({
     dob: '',
+    age: null,
     region: '',
     residenceDuration: '',
     housingStatus: '',
@@ -92,10 +95,6 @@ export default function OnboardingPage() {
     }
   };
 
-  const skip = () => {
-    window.location.href = '/check';
-  };
-
   const later = () => {
     window.location.href = '/check';
   };
@@ -151,9 +150,6 @@ export default function OnboardingPage() {
           <span>청년주택 적격성 워크스페이스</span>
         </div>
         <div className="nav-actions">
-          <button type="button" className="btn btn-link" onClick={skip}>
-            건너뛰기
-          </button>
           <button type="button" className="btn btn-secondary" onClick={later}>
             나중에
           </button>
@@ -210,7 +206,11 @@ export default function OnboardingPage() {
                   type="date"
                   name="dob"
                   value={profile.dob}
-                  onChange={(e) => update('dob', e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    update('dob', v);
+                    setProfile((p) => ({ ...p, age: v ? calcAgeFromDob(v) : null }));
+                  }}
                   aria-describedby="dob-hint"
                   required
                 />
@@ -500,13 +500,6 @@ export default function OnboardingPage() {
           <input type="hidden" name="current_step" value={step} />
 
           <div className="onboarding-actions">
-            <div className="left-actions">
-              <label className="checkbox-note">
-                {/* 알림 기능은 P1 — MVP에서는 UI만 남기고 백엔드 미연결 */}
-                <input type="checkbox" name="notify_eligible" disabled />
-                <span>나중에 다시 확인할 항목을 알림으로 받기</span>
-              </label>
-            </div>
             <div className="action-row">
               <button
                 type="button"
@@ -516,7 +509,11 @@ export default function OnboardingPage() {
               >
                 이전
               </button>
-              <button type="submit" className="btn btn-primary">
+              <button
+                type="submit"
+                className="btn btn-primary"
+                style={{ marginLeft: 'auto' }}
+              >
                 {step === 5 ? '완료' : '다음'}
               </button>
             </div>

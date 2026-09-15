@@ -12,3 +12,4 @@ tmp/
 .hermes-verify/
 hermes-verify-*/
 hermES_handoff_*/
+app/.vercel/.env.development.local
