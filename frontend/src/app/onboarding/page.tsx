@@ -143,9 +143,11 @@ export default function OnboardingPage() {
     <div className="min-h-screen bg-[#f7f8fa] flex flex-col">
       <header className="top-nav">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true">
-            Y
-          </span>
+          <img
+            src="/logo.png"
+            alt="청년주택 적격성 워크스페이스"
+            className="h-20 w-auto"
+          />
           <span>청년주택 적격성 워크스페이스</span>
         </div>
         <div className="nav-actions">

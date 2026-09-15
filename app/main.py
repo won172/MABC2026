@@ -238,6 +238,7 @@ class ChatSessionCreate(BaseModel):
 class ChatMessageCreate(BaseModel):
     session_id: str
     content: str
+    field_key: Optional[str] = None  # 프로필 갱신용 필드 키 (dob/region/residence_duration/housing_status/marital_status/income_info/asset_info/car_value)
 
 
 class ChatResponse(BaseModel):
@@ -380,42 +381,78 @@ async def save_onboarding_progress(request: Request, data: OnboardingProgress):
     
     conn = get_db()
     cursor = conn.cursor()
-    
-    now = datetime.now().isoformat()
-    cursor.execute("""
-        UPDATE user_profiles 
-        SET dob = ?, region = ?, residence_duration = ?, 
-            housing_status = ?, marital_status = ?, 
-            income_info = ?, asset_info = ?, car_value = ?,
-            notify_eligible = ?, onboarding_step = ?, updated_at = ?
-        WHERE id = ?
-    """, (
-        data.dob, data.region, data.residence_duration,
-        data.housing_status, data.marital_status,
-        data.income_info, data.asset_info, data.car_value,
-        int(data.notify_eligible),
-        data.current_step or 2,
-        now, user_id
-    ))
-    conn.commit()
 
-    if cursor.rowcount == 0:
-        cursor.execute("""
-            INSERT INTO user_profiles (id, created_at, updated_at, dob, region, residence_duration,
+    now = datetime.now().isoformat()
+    profile_now = now
+
+    # 기존 행 존재 여부 확인
+    cursor.execute("SELECT id FROM user_profiles WHERE id = ?", (user_id,))
+    existing = cursor.fetchone()
+
+    set_clauses: list[str] = []
+    values: list[Any] = []
+    if data.dob is not None and not _is_uncertain_answer(data.dob):
+        set_clauses.append("dob = ?")
+        values.append(data.dob)
+    if data.region is not None and not _is_uncertain_answer(data.region):
+        set_clauses.append("region = ?")
+        values.append(data.region)
+    if data.residence_duration is not None and not _is_uncertain_answer(data.residence_duration):
+        set_clauses.append("residence_duration = ?")
+        values.append(data.residence_duration)
+    if data.housing_status is not None and not _is_uncertain_answer(data.housing_status):
+        set_clauses.append("housing_status = ?")
+        values.append(data.housing_status)
+    if data.marital_status is not None and not _is_uncertain_answer(data.marital_status):
+        set_clauses.append("marital_status = ?")
+        values.append(data.marital_status)
+    if data.income_info is not None and not _is_uncertain_answer(data.income_info):
+        set_clauses.append("income_info = ?")
+        values.append(data.income_info)
+    if data.asset_info is not None and not _is_uncertain_answer(data.asset_info):
+        set_clauses.append("asset_info = ?")
+        values.append(data.asset_info)
+    if data.car_value is not None and not _is_uncertain_answer(data.car_value):
+        set_clauses.append("car_value = ?")
+        values.append(data.car_value)
+
+    if existing:
+        # 기존 행이 있으면 전달된 값만 조건부 갱신
+        if set_clauses:
+            set_clauses.append("updated_at = ?")
+            values.append(profile_now)
+            values.append(user_id)
+            cursor.execute(
+                f"UPDATE user_profiles SET {', '.join(set_clauses)} WHERE id = ?",
+                values,
+            )
+        else:
+            # 갱신할 필드가 없어도 updated_at만 반영
+            cursor.execute(
+                "UPDATE user_profiles SET updated_at = ? WHERE id = ?",
+                (profile_now, user_id),
+            )
+    else:
+        # 기존 행이 없으면 새로 삽입
+        cursor.execute(
+            """INSERT INTO user_profiles (
+                id, created_at, updated_at, dob, region, residence_duration,
                 housing_status, marital_status, income_info, asset_info, car_value,
-                notify_eligible, onboarding_step)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            user_id, now, now,
-            data.dob, data.region, data.residence_duration,
-            data.housing_status, data.marital_status,
-            data.income_info, data.asset_info, data.car_value,
-            int(data.notify_eligible),
-            data.current_step or 2,
-        ))
-        conn.commit()
+                notify_eligible, onboarding_step
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                user_id, now, now,
+                data.dob, data.region, data.residence_duration,
+                data.housing_status, data.marital_status,
+                data.income_info, data.asset_info, data.car_value,
+                int(data.notify_eligible),
+                data.current_step or 2,
+            ),
+        )
+
+    conn.commit()
     conn.close()
-    
+
     return {"status": "ok", "user_id": user_id}
 
 @app.get("/api/onboarding/progress")
@@ -823,42 +860,116 @@ SOLAR_MODEL = os.environ.get("SOLAR_MODEL", "solar-pro4").strip()
 AS_USER = "user"
 AS_SYSTEM = "system"
 
+def _strip_markdown_line_prefix(line: str) -> str:
+    """줄 앞의 마크다운 헤더/볼드/목록 기호 등을 제거해 판정 매칭을 용이하게 한다.
+
+    '## 최종 판정: 🟢 신청 가능' 이나 '**최종 판정:** 신청 가능' 같은 변형에서도
+    '최종 판정:'을 찾을 수 있게 한다.
+    """
+    s = line.strip()
+    # 마크다운 헤더 (# 하나 이상)
+    s = re.sub(r"^#{1,6}\s+", "", s)
+    # 볼드/이탤릭 마커 (** 또는 *) — 양끝과 나머지 연속 마커를 정리
+    s = s.strip("*")
+    # 번호/불릿 목록 마커 (예: "- ", "* ", "1. ", "1) " 등)
+    s = re.sub(r"^[\-\*\d.]+\s+", "", s)
+    return s.strip()
+
+
 def _parse_eligibility_result(raw: str) -> dict:
     """Solar 응답 텍스트에서 🟢/🔴/🟡 최종 판정과 한 줄 요약, 조건 대조, 근거를 추출한다.
 
     고정 응답은 쓰지 않는다. Solar가 생성한 텍스트만 파싱하며, 형태가 불명확하면
     확보 가능한 범위까지만 반환하고 나머지는 null로 남긴다.
+
+    판정 로직은 "신청 가능" 같은 문구만으로 eligible을 만들지 않는다.
+    색 토큰(🟢/🔴/🟡) 또는 최종 판정 줄의 명확한 문구만으로 판정하며,
+    판정 줄을 못 찾았거나 색 토큰이 없으면 needs_review로 처리한다.
+    한 줄에 두 가지 이상 색 토큰이 섞여 있으면 신뢰할 수 없는 응답으로 보고
+    needs_review로 처리한다.
     """
     text = raw or ""
     result = None
     summary = None
     details = []
 
-    # 최종 판정 토큰 탐색
-    if "🟢" in text or "신청 가능" in text:
-        result = "eligible"
-    elif "🔴" in text or "신청 불가" in text:
-        result = "ineligible"
-    elif "🟡" in text or "추가 확인 필요" in text or "확인 필요" in text:
-        result = "needs_review"
-
-    # 한 줄 요약: "한 줄 요약" 또는 "한 문장" 뒤 첫 문장-ish
-    # 정규식 없이 단순 구간 추출로 충분하다. 없으면 None.
-    for marker in ["한 줄 요약", "한 문장", "한줄 요약"]:
-        if marker in text:
-            start = text.find(marker)
-            snippet = text[start:]
-            # 다음 섹션 헤더 이전까지
-            end = 10000
-            for next_marker in ["자격조건 대조", "판단 근거", "신청 전 확인할 것", "최종 판정"]:
-                idx = snippet.find(next_marker)
-                if idx != -1 and idx < end:
-                    end = idx
-            candidate = snippet[len(marker):end].strip()
-            if candidate:
-                # 앞뒤 개행 정리
-                summary = candidate.split("\n")[0].strip()
+    # --- 최종 판정 줄 찾기 (마크다운 앞붙임 제거 후 매칭) ---
+    # "최종 판정:" 줄이 있으면 그 줄에서만 판정한다. 중간 문장(예: "~만 신청 가능하며")에
+    # "신청 가능"이 들어가는 오판정을 막기 위해서다. 그 줄이 없을 때만 전체 텍스트 폴백.
+    final_judgment_line = None
+    for line in text.splitlines():
+        cleaned = _strip_markdown_line_prefix(line)
+        if "최종 판정" in cleaned and ":" in cleaned:
+            final_judgment_line = cleaned
             break
+
+    if final_judgment_line:
+        # 한 줄에 색 토큰이 둘 이상 섞여 있으면 신뢰할 수 없는 응답 → 확인 필요
+        green = final_judgment_line.count("🟢")
+        red = final_judgment_line.count("🔴")
+        yellow = final_judgment_line.count("🟡")
+        color_count = green + red + yellow
+
+        if color_count >= 2:
+            result = "needs_review"
+        elif color_count == 1:
+            if green == 1:
+                result = "eligible"
+            elif red == 1:
+                result = "ineligible"
+            else:  # yellow == 1
+                result = "needs_review"
+        else:
+            # 색 토큰 없이 문구만 있는 경우
+            if "신청 불가" in final_judgment_line:
+                result = "ineligible"
+            elif "추가 확인 필요" in final_judgment_line:
+                result = "needs_review"
+            # "신청 가능" 문구만으로는 eligible을 만들지 않는다 (위험한 확정 방지)
+
+    if result is None:
+        # 최종 판정 줄이 없거나 그 줄에 판정 토큰이 없는 경우: 전체 텍스트 폴백
+        # 색 토큰만 본다. "신청 가능" 문구만으로 eligible을 만들지 않는다.
+        green = text.count("🟢")
+        red = text.count("🔴")
+        yellow = text.count("🟡")
+        color_count = green + red + yellow
+
+        if color_count >= 2:
+            result = "needs_review"
+        elif color_count == 1:
+            if green == 1:
+                result = "eligible"
+            elif red == 1:
+                result = "ineligible"
+            else:  # yellow == 1
+                result = "needs_review"
+        else:
+            # 색 토큰이 하나도 없으면 확인 필요로 처리
+            result = "needs_review"
+
+    # 한 줄 요약: "한 줄 요약" / "한 문장" / "한줄 요약" 뒤 첫 문장-ish
+    # Solar가 "**한 줄 요약**"처럼 마크다운 볼드로 쓰는 경우가 있으므로,
+    # 후보 텍스트 앞뒤의 "**" 및 잉여 공백/개행을 정리한 뒤 첫 줄을 취한다.
+    for marker in ["한 줄 요약", "한 문장", "한줄 요약"]:
+        idx = text.find(marker)
+        if idx == -1:
+            continue
+        start = idx + len(marker)
+        snippet = text[start:]
+        # 다음 섹션 헤더 이전까지
+        end = 10000
+        for next_marker in ["자격조건 대조", "판단 근거", "신청 전 확인할 것", "최종 판정"]:
+            nxt = snippet.find(next_marker)
+            if nxt != -1 and nxt < end:
+                end = nxt
+        candidate = snippet[:end].strip()
+        # 앞뒤 "**" 제거 (예: "**한 줄 요약**\n내용" → "내용")
+        candidate = candidate.strip("*").strip()
+        if candidate:
+            # 개행 기준 첫 라인만, 그리고 그 라인도 다시 별표 정리
+            summary = candidate.split("\n")[0].strip().strip("*").strip()
+        break
 
     # 조건 대조 테이블-ish: 표 형태는 그대로 보존하기 어려우므로,
     # 라인으로 분리한 뒤 "조건 | 공고 기준 | 내 조건 | 판정" 패턴을 찾는다.
@@ -880,13 +991,14 @@ def _parse_eligibility_result(raw: str) -> dict:
                     criteria = cells[1] if len(cells) > 1 else ""
                     user_info = cells[2] if len(cells) > 2 else ""
                     verdict = cells[3] if len(cells) > 3 else ""
-                    # 판정 토큰 정규화
-                    if "⭕" in verdict or "충족" in verdict:
-                        vr = "met"
+                    # 판정 토큰 정규화 — 확인 필요(⚠️)를 가장 먼저 본다. 그 뒤 부정/긍정 순.
+                    # 텍스트에 다른 토큰이 섞여 있어도(예: "확인 필요(…충족 여부와 무관)") 우선 순위가 맞도록.
+                    if "⚠️" in verdict or "확인 필요" in verdict:
+                        vr = "needs_review"
                     elif "❌" in verdict or "미충족" in verdict:
                         vr = "not_met"
-                    elif "⚠️" in verdict or "확인 필요" in verdict:
-                        vr = "needs_review"
+                    elif "⭕" in verdict or "충족" in verdict:
+                        vr = "met"
                     else:
                         vr = "unverified"
                     details.append({
@@ -905,22 +1017,67 @@ def _parse_eligibility_result(raw: str) -> dict:
                 if not stripped.startswith("|"):
                     break
 
+    # 신청 전 확인할 것 섹션 추출
+    pre_check = None
+    pre_check_marker = "신청 전 확인할 것"
+    pre_check_idx = text.find(pre_check_marker)
+    if pre_check_idx != -1:
+        after_header = text[pre_check_idx + len(pre_check_marker):]
+        end_markers = ["이 판정은 공고문 근거로 한 1차 확인이며"]
+        end_pos = len(after_header)
+        for em in end_markers:
+            idx = after_header.find(em)
+            if idx != -1 and idx < end_pos:
+                end_pos = idx
+        pre_check = after_header[:end_pos].strip()
+
+    # 나의 순위 추출 (공고에 순위 기준이 있는 경우에만 출력됨)
+    rank = None
+    rank_marker = "나의 순위"
+    rank_idx = text.find(rank_marker)
+    if rank_idx != -1:
+        after_rank = text[rank_idx:]
+        first_line = after_rank.split("\n")[0].strip()
+        # "나의 순위: 1순위 / 2순위 / 3순위 (공고 근거: ...)" 또는 "나의 순위: 순위 없음"
+        m = re.search(r"나의 순위:\s*(.+)$", first_line)
+        if m:
+            rank = m.group(1).strip()
+
+    # 나의 신청계층 추출 (공고에 신청계층 기준이 있는 경우에만 출력됨)
+    applicant_type = None
+    applicant_type_marker = "나의 신청계층"
+    applicant_type_idx = text.find(applicant_type_marker)
+    if applicant_type_idx != -1:
+        after_type = text[applicant_type_idx:]
+        first_line = after_type.split("\n")[0].strip()
+        # "나의 신청계층: 청년 / 신청계층 확인 필요" 형태
+        m = re.search(r"나의 신청계층:\s*(.+)$", first_line)
+        if m:
+            applicant_type = m.group(1).strip()
+
     return {
         "result": result,
         "summary": summary,
         "details": details,
+        "pre_check": pre_check,
+        "rank": rank,
+        "applicant_type": applicant_type,
         "raw": text,
     }
 
 
-def build_check_prompt(notice_content: str, user_profile: dict, history=None) -> str:
-    """Solar에 보낼 판정 프롬프트를 구성한다.
+def build_chat_messages(
+    notice_content: str,
+    user_profile: dict,
+    history: Optional[list] = None,
+    extra_user_text: Optional[str] = None,
+) -> list:
+    """Solar에 보낼 메시지 리스트를 구성한다.
 
-    스킬 파일(skills/SKILL.md)을 읽어 프롬프트 최상단에 포함한다.
-    코드는 스킬 파일을 재가공하거나 규칙을 중복하지 않고, 그대로 전달만 한다.
-    공고 텍스트 + 프로필 + (옵션) 이전 대화 맥락을 넣는다.
-    공고에 없는 조건을 외부에서 가져오지 않고, 최종 판단은 시행기관 심사로 결정된다는 점은
-    스킬 파일에 이미 명시되어 있으므로 프롬프트에서 중복하지 않는다.
+    - system 메시지: 스킬 파일 원문
+    - 첫 user 메시지: 공고 + 사용자 프로필 (+ extra_user_text가 있으면 추가)
+    - history: user/assistant 역할별 메시지로 이어붙임 (role/content dict 리스트)
+    이전 대화는 텍스트로 붙여 넣지 않고 역할별로 분리된 메시지로 보낸다.
     """
     skill_md = _load_skill_md()
 
@@ -943,44 +1100,55 @@ def build_check_prompt(notice_content: str, user_profile: dict, history=None) ->
 
     profile_block = "\n".join(profile_lines)
 
-    history_block = ""
+    # 첫 user 메시지 구성
+    first_user_parts = [
+        "## 공고 내용\n" + notice_content,
+        "## 사용자 프로필\n" + profile_block,
+    ]
+    if extra_user_text:
+        first_user_parts.append(extra_user_text)
+    first_user_content = "\n".join(first_user_parts)
+
+    messages = [
+        {
+            "role": AS_SYSTEM,
+            "content": (
+                "아래 스킬 파일의 모든 규칙과 출력 형식을 그대로 따라 판정하세요.\n\n"
+                + skill_md
+            ),
+        },
+        {"role": AS_USER, "content": first_user_content},
+    ]
+
     if history:
-        lines = []
         for h in history:
             role = h.get("role") or "user"
             content = h.get("content") or ""
-            if role == "user":
-                lines.append(f"사용자: {content}")
-            else:
-                lines.append(f"AI 어시스턴트: {content}")
-        history_block = "\n\n## 이전 대화\n" + "\n".join(lines)
+            if content:
+                messages.append({"role": role, "content": content})
 
-    prompt = f"""## 사용할 스킬 (youth-housing-eligibility-checker)
-아래 스킬 파일의 모든 규칙과 출력 형식을 그대로 따라 판정하세요. 코드에서 전달해준 스킬 원문입니다.
+    # 출력 규칙은 대화 기록 맨 끝에 별도 user 메시지로 추가한다.
+    output_rules = (
+        "- 질문 단계: 한 번에 한 항목만 묻고, 🟢·🔴·🟡 판정 토큰이나 "
+        '"한 줄 요약"·"자격조건 대조" 같은 최종 산출물 헤더는 절대 쓰지 않는다. '
+        "질문 단계와 최종 판정을 한 응답에 섞지 않는다.\n"
+        "- 최종 판정 단계: 스킬 파일의 9단계 출력 형식을 그대로 따른다. "
+        "최종 판정(신청 가능 / 신청 불가 / 추가 확인 필요)을 가장 먼저 출력한다.\n"
+        "- 위 규칙과 스킬 파일이 충돌하면 스킬을 따른다.\n"
+        "- 텍스트에서 물결표(~) 대신 하이픈(-)을 사용하라. "
+        "물결표는 프론트엔드 마크다운 렌더에서 취소선으로 표시되므로 응답 텍스트에 물결표를 넣지 않는다. "
+        '범위 표시에 "1990~2000" 대신 "1990-2000"을 쓰고, 근사치 표현도 "~3명" 대신 "-3명" 또는 "약 3명"으로 바꾼다.'
+    )
+    messages.append({"role": AS_USER, "content": "\n\n## 출력 규칙\n" + output_rules})
 
-{skill_md}
-
-## 공고 내용
-{notice_content}
-
-## 사용자 프로필
-{profile_block}
-{history_block}
-
-## 수행 지시
-위 공고 하나를 읽고, 스킬 파일에 명시된 단계(0~10)와 출력 형식을 그대로 따라 신청 가능 여부를 판정하세요.
-
-- 지금이 질문 단계이면, 질문과 답변 요청만 간결하게 출력하세요. 다른 설명은 최소화하세요.
-- 지금이 최종 판정 단계이면 스킬 파일의 9단계 출력 형식을 그대로 따르세요.
-- 스킬 파일에 명시된 원칙·규칙·출력 형식을 우선하며, 위 지시와 스킬 파일이 충돌하면 스킬 파일을 따르세요.
-"""
-
-    return prompt.strip()
+    return messages
 
 
-def call_solar(prompt: str) -> str:
-    """Solar Pro4에 채팅을 보내고 응답 텍스트를 반환한다.
+def call_solar(messages: list) -> str:
+    """Solar Pro4에 메시지 리스트를 보내고 응답 텍스트를 반환한다.
 
+    system/user/assistant 역할을 분리된 메시지로 전송하며,
+    reasoning=medium, temperature=0, max_tokens=8192, timeout=120을 사용한다.
     고정 응답은 쓰지 않는다. 실제 호출이 실패하거나 키가 없으면 예외를 올린다(호출부가 처리).
     """
     if not SOLAR_API_KEY:
@@ -988,11 +1156,10 @@ def call_solar(prompt: str) -> str:
 
     payload = {
         "model": SOLAR_MODEL,
-        "messages": [
-            {"role": AS_USER, "content": prompt},
-        ],
-        "max_tokens": 4096,
-        "temperature": 0.2,
+        "messages": messages,
+        "max_tokens": 8192,
+        "temperature": 0,
+        "reasoning_effort": "medium",
     }
     headers = {
         "Authorization": f"Bearer {SOLAR_API_KEY}",
@@ -1002,7 +1169,7 @@ def call_solar(prompt: str) -> str:
         f"{SOLAR_BASE_URL}/v1/chat/completions",
         headers=headers,
         json=payload,
-        timeout=60,
+        timeout=120,
     )
     resp.raise_for_status()
     body = resp.json()
@@ -1015,38 +1182,216 @@ def call_solar(prompt: str) -> str:
 def is_final_judgment(text: str) -> bool:
     """Solar 응답이 최종 판정인지(질문 단계가 아닌지) 판별한다.
 
-    🟢/🔴/🟡 최종 판정 토큰 + 한 줄 요약/자격조건 대조/판단 근거/신청 전 확인할 것 중
-    하나라도 있으면 최종 판정으로 본다. 질문만 있으면 False.
+    판정 토큰(🟢/🔴/🟡)과 최종 출력 구조 마커가 함께 있고,
+    질문형 표현이 전혀 없을 때만 True를 반환한다.
+    질문형 표현은 질문 단어·종결어미·사용자 정보를 요구하는 패턴까지 넓게 탐지한다.
+    하나라도 질문형 표현이 있으면 아무리 판정 토큰이 있어도 False를 반환한다.
     """
     if not text:
         return False
+
     has_judgment_token = "🟢" in text or "🔴" in text or "🟡" in text
-    markers = ["한 줄 요약", "한 문장", "한줄 요약", "자격조건 대조", "판단 근거", "신청 전 확인할 것"]
+    if not has_judgment_token:
+        return False
+
+    markers = [
+        "한 줄 요약",
+        "한 문장",
+        "한줄 요약",
+        "자격조건 대조",
+        "판단 근거",
+        "신청 전 확인할 것",
+        "나의 순위",
+    ]
     has_structure = any(m in text for m in markers)
-    return bool(has_judgment_token and has_structure)
+    if not has_structure:
+        return False
+
+    # 질문형 표현 탐지 (넓게)
+    question_indicators = [
+        # 존대 질문 종결어미
+        "알려주세요",
+        "알려주실 수 있나요",
+        "알려주실 수 있으신가요",
+        "확인 후 다시 알려주세요",
+        "확인해 주세요",
+        "확인해주세요",
+        "확인해주시고",
+        "회신해주세요",
+        "회신해 주세요",
+        "답변해주세요",
+        "답변해 주세요",
+        "입력해주세요",
+        "입력해 주세요",
+        "입력해주시고",
+        # 평어/해요체 질문 종결어미
+        "알려줘",
+        "입력해줘",
+        "확인해줘",
+        "답변해줘",
+        "몇년생",
+        "몇년 생",
+        "이에요",
+        "인가요",
+        "인가요?",
+        "인지",
+        "아닌지",
+        "알고 계신가요",
+        "알고 있습니까",
+        "아세요",
+        "아십니까",
+        "맞나요",
+        "맞습니까",
+        "맞는지",
+        "올까요",
+        "될까요",
+        "할까요",
+        # 사용자 정보를 요구하는 패턴
+        "생년월일을 알려주세요",
+        "거주 지역을 알려주세요",
+        "무주택 여부를 알려주세요",
+        "혼인 여부를 알려주세요",
+        "가구 구성을 알려주세요",
+        "월평균 소득을 알려주세요",
+        "소득을 알려주세요",
+        "자산을 알려주세요",
+        "차량가액을 알려주세요",
+        "차량 가액을 알려주세요",
+        "자동차 가액을 알려주세요",
+        # 물음표 질문 — 문장 끝에 물음표가 있으면 질문으로 간주.
+        # 단, 스킬 파일 본문이나 코드 샘플에 포함된 물음표는 여기선 걸리지 않도록
+        # 탐지 대상을 실제 응답 텍스트(스킬 프롬프트 제외)로 한정하지 못하므로,
+        # 물음표 단독 일정은 유지하고 아래 extract_question에서 보정한다.
+        "?",
+    ]
+    lower = text.lower()
+    for ind in question_indicators:
+        if ind in lower:
+            return False
+
+    return True
 
 
 def extract_question(text: str):
     """Solar 응답이 질문 단계면 질문 내용을 추출해 반환한다.
 
-    없으면 None.
+    없으면 None. 여러 질문 줄이 있으면 개행으로 연결해 모두 반환한다.
+    최종 판정 구조 마커가 보이는 응답은 질문으로 보지 않는다.
     """
     if not text:
         return None
+
     text = text.strip()
-    # 최종 판정 표지 있으면 질문 아님
-    if is_final_judgment(text):
+
+    # 이미 최종 판정 구조면 질문 아님
+    if _looks_like_final(text):
         return None
-    # 첫 줄을 질문 문장으로 간주
-    first = text.splitlines()[0].strip()
-    if not first:
+
+    lines = text.splitlines()
+    question_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # 이전 대화 접두 제거
+        stripped = re.sub(r"^(사용자|AI 어시스턴트):\s*", "", stripped)
+        if len(stripped) < 3:
+            continue
+        # 질문으로 볼 수 있는 줄만 수집
+        if _line_is_question(stripped):
+            question_lines.append(stripped)
+
+    if not question_lines:
+        # 질문 패턴이 안 보여도 첫 줄이 짧으면 질문으로 간주
+        first = lines[0].strip() if lines else ""
+        first = re.sub(r"^(사용자|AI 어시스턴트):\s*", "", first)
+        if first and len(first) >= 3:
+            question_lines.append(first)
+
+    if not question_lines:
         return None
-    # "사용자" 접두가 붙은 경우 정리
-    first = re.sub(r"^사용자:\s*", "", first)
-    first = re.sub(r"^AI 어시스턴트:\s*", "", first)
-    if len(first) < 3:
-        return None
-    return first
+
+    combined = "\n".join(question_lines).strip()
+    return combined if len(combined) >= 3 else None
+
+
+def _looks_like_final(text: str) -> bool:
+    """응답이 최종 판정 구조를 갖췄는지 빠르게 확인한다."""
+    if not text:
+        return False
+    has_token = "🟢" in text or "🔴" in text or "🟡" in text
+    if not has_token:
+        return False
+    markers = [
+        "한 줄 요약",
+        "한 문장",
+        "한줄 요약",
+        "자격조건 대조",
+        "판단 근거",
+        "신청 전 확인할 것",
+        "나의 순위",
+    ]
+    return any(m in text for m in markers)
+
+
+def _line_is_question(line: str) -> bool:
+    """한 줄이 질문으로 볼 수 있는지 확인한다."""
+    lower = line.lower()
+    # 확정적인 질문 종결/요청 표현
+    strong_indicators = [
+        "알려주세요",
+        "알려주실 수 있나요",
+        "알려주실 수 있으신가요",
+        "알려줘",
+        "입력해주세요",
+        "입력해 주세요",
+        "입력해줘",
+        "입력해주시고",
+        "확인해 주세요",
+        "확인해주세요",
+        "확인해주시고",
+        "확인 후 다시 알려주세요",
+        "회신해주세요",
+        "회신해 주세요",
+        "답변해주세요",
+        "답변해 주세요",
+        "답변해줘",
+        "몇년생",
+        "몇년 생",
+        "생년월일을 알려주세요",
+        "거주 지역을 알려주세요",
+        "무주택 여부를 알려주세요",
+        "혼인 여부를 알려주세요",
+        "가구 구성을 알려주세요",
+        "월평균 소득을 알려주세요",
+        "소득을 알려주세요",
+        "자산을 알려주세요",
+        "차량가액을 알려주세요",
+        "차량 가액을 알려주세요",
+        "자동차 가액을 알려주세요",
+        "알고 계신가요",
+        "알고 있습니까",
+        "아세요",
+        "아십니까",
+        "맞나요",
+        "맞습니까",
+        "맞는지",
+        "이에요",
+        "인가요",
+        "올까요",
+        "될까요",
+        "할까요",
+        "인지",
+        "아닌지",
+    ]
+    for ind in strong_indicators:
+        if ind in lower:
+            return True
+    # 문장 끝 물음표는 질문으로 간주하되, 판정 마커가 있는 줄의 물음표는 제외
+    if lower.rstrip().endswith("?"):
+        # "신청 가능?/불가?"처럼 판정 결과를 묻는 형태도 질문으로 본다.
+        return True
+    return False
 
 
 @app.post("/api/chat/session")
@@ -1077,8 +1422,8 @@ async def create_chat_session(request: Request, data: ChatSessionCreate):
     }
 
     try:
-        prompt = build_check_prompt(notice_text, user_profile)
-        raw = call_solar(prompt)
+        messages = build_chat_messages(notice_text, user_profile)
+        raw = call_solar(messages)
     except RuntimeError as exc:
         return JSONResponse(
             status_code=503,
@@ -1099,7 +1444,7 @@ async def create_chat_session(request: Request, data: ChatSessionCreate):
         content = raw
     else:
         role = "assistant"
-        content = question_text or raw
+        content = raw
 
     session_id = str(uuid.uuid4())
     notice_id = str(uuid.uuid5(uuid.NAMESPACE_OID, notice_text[:500]))
@@ -1113,20 +1458,42 @@ async def create_chat_session(request: Request, data: ChatSessionCreate):
     # 이후 /api/chat/message에서 DB 기준으로 프로필을 읽어오므로
     # 세션 생성 시점에 전달된 프로필이 유실되지 않는다.
     profile_now = datetime.now().isoformat()
-    cursor.execute(
-        """UPDATE user_profiles
-           SET dob = ?, region = ?, residence_duration = ?,
-               housing_status = ?, marital_status = ?,
-               income_info = ?, asset_info = ?, car_value = ?,
-               updated_at = ?
-           WHERE id = ?""",
-        (
-            data.dob, data.region, data.residence_duration,
-            data.housing_status, data.marital_status,
-            data.income_info, data.asset_info, data.car_value,
-            profile_now, user_id,
-        ),
-    )
+    # 전달된 값이 있는 필드만 조건부 갱신 — 없는 필드를 NULL로 덮어쓰지 않는다.
+    # 이렇게 해야 이전에 채팅 답변으로 DB에 저장된 값이 새 세션 시작 때 날아가지 않는다.
+    set_clauses: list[str] = []
+    values: list[Any] = []
+    if data.dob is not None:
+        set_clauses.append("dob = ?")
+        values.append(data.dob)
+    if data.region is not None:
+        set_clauses.append("region = ?")
+        values.append(data.region)
+    if data.residence_duration is not None:
+        set_clauses.append("residence_duration = ?")
+        values.append(data.residence_duration)
+    if data.housing_status is not None:
+        set_clauses.append("housing_status = ?")
+        values.append(data.housing_status)
+    if data.marital_status is not None:
+        set_clauses.append("marital_status = ?")
+        values.append(data.marital_status)
+    if data.income_info is not None:
+        set_clauses.append("income_info = ?")
+        values.append(data.income_info)
+    if data.asset_info is not None:
+        set_clauses.append("asset_info = ?")
+        values.append(data.asset_info)
+    if data.car_value is not None:
+        set_clauses.append("car_value = ?")
+        values.append(data.car_value)
+    if set_clauses:
+        set_clauses.append("updated_at = ?")
+        values.append(profile_now)
+        values.append(user_id)
+        cursor.execute(
+            f"UPDATE user_profiles SET {', '.join(set_clauses)} WHERE id = ?",
+            values,
+        )
 
     cursor.execute("SELECT id FROM notices WHERE id = ?", (notice_id,))
     if cursor.fetchone() is None:
@@ -1167,6 +1534,7 @@ async def create_chat_session(request: Request, data: ChatSessionCreate):
         result_label = parsed.get("result") or "needs_review"
         summary_text = parsed.get("summary")
         details = parsed.get("details") or []
+        rank_text = parsed.get("rank")
 
         # 조건 상태 재확인: details에 needs_review/unverified가 하나라도 있으면
         # Solar가 🟢로 판정했더라도 전체 결과는 needs_review로 내린다.
@@ -1211,8 +1579,29 @@ async def create_chat_session(request: Request, data: ChatSessionCreate):
         response["summary"] = summary_text
         response["details"] = details
         response["notice_id"] = notice_id
+        if rank_text:
+            response["rank"] = rank_text
+        applicant_type_text = parsed.get("applicant_type")
+        if applicant_type_text:
+            response["applicant_type"] = applicant_type_text
 
     return response
+
+
+def _is_uncertain_answer(text: str) -> bool:
+    """사용자가 명시적으로 '모르겠다'고 표현한 답변인지 확인한다.
+
+    이런 답변은 프로필에 저장하지 않고, DB와 in-memory 상태 모두 갱신하지 않는다.
+    """
+    if not text:
+        return False
+    t = text.strip().lower()
+    if t in {"모름", "아직 모르겠어요", "모르겠어요", "몰름", "잘 모름", "모르겠음", "아직 모름", "확인 중"}:
+        return True
+    # "모름"이 포함된 짧은 답변도 uncertain으로 간주 (예: "소득 모름")
+    if "모름" in t and len(t) <= 15:
+        return True
+    return False
 
 
 @app.post("/api/chat/message")
@@ -1270,32 +1659,104 @@ async def send_chat_message(request: Request, data: ChatMessageCreate):
 
     history.append({"role": "user", "content": data.content})
 
-    try:
-        prompt = build_check_prompt(notice_text, user_profile, history=history)
-        raw = call_solar(prompt)
-    except RuntimeError as exc:
-        conn.close()
-        return JSONResponse(
-            status_code=503,
-            content={"status": "unavailable", "detail": str(exc)},
-        )
-    except Exception as exc:
-        conn.close()
-        return JSONResponse(
-            status_code=503,
-            content={"status": "unavailable", "detail": f"Solar 호출 실패: {exc}"},
-        )
+    # 필드 키가 함께 전달됐으면 user_profiles에 즉시 반영해,
+    # 다음 프롬프트의 '사용자 프로필' 블록에 미제공 대신 실제 값이 보이게 한다.
+    if data.field_key:
+        if _is_uncertain_answer(data.content):
+            # "모름", "아직 모르겠어요" 등은 프로필에 저장하지 않는다.
+            # DB와 in-memory 상태 모두 갱신하지 않는다.
+            pass
+        else:
+            field_map = {
+                "dob": "dob",
+                "region": "region",
+                "residence_duration": "residence_duration",
+                "housing_status": "housing_status",
+                "marital_status": "marital_status",
+                "income_info": "income_info",
+                "asset_info": "asset_info",
+                "car_value": "car_value",
+            }
+            db_key = field_map.get(data.field_key)
+            if db_key:
+                cursor.execute(
+                    f"UPDATE user_profiles SET {db_key} = ?, updated_at = ? WHERE id = ?",
+                    (data.content, now, user_id),
+                )
+                # 방금 UPDATE한 값을 in-memory user_profile에도 반영해야
+                # build_check_prompt는 예전 문자열 프롬프트 방식이라 더 이상 쓰지 않음. 지금은 build_chat_messages 사용.
+                user_profile[db_key] = data.content
 
-    parsed = _parse_eligibility_result(raw)
-    final = is_final_judgment(raw)
-    question_text = extract_question(raw) if not final else None
+    # 사용자 메시지를 chat_messages에 저장
+    user_message_id = str(uuid.uuid4())
+    cursor.execute(
+        """INSERT INTO chat_messages
+           (id, session_id, role, content, meta, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (user_message_id, session_id, "user", data.content, "", now),
+    )
+    conn.commit()
+
+    # Solar가 질문을 잘 못 세는 문제를 코드로 보완한다.
+    # 이전 메시지 중 AI 질문(또는 최종 판정이 아닌 응답)이 5건을 넘으면
+    # 더 묻지 말고 지금 Solar에 강제 마무리 프롬프트를 보내 판정한다.
+    MAX_QUESTION_TURNS = 5
+    _assistant_exchanges = 0
+    for _h in history:
+        _role = _h.get("role")
+        _content = _h.get("content") or ""
+        _is_final = _looks_like_final(_content)
+        if _role == "assistant" and not _is_final:
+            _assistant_exchanges += 1
+    if _assistant_exchanges > MAX_QUESTION_TURNS:
+        history.append({"role": "user", "content": "\n\n## 강제 마무리\n질문을 멈추고 지금 최종 판정을 내려 주세요. 스킬 파일의 9단계 출력 형식을 그대로 사용하세요."})
+        try:
+            messages = build_chat_messages(
+                notice_text,
+                user_profile,
+                history=history,
+            )
+            raw = call_solar(messages)
+        except RuntimeError as exc:
+            conn.close()
+            return JSONResponse(
+                status_code=503,
+                content={"status": "unavailable", "detail": str(exc)},
+            )
+        except Exception as exc:
+            conn.close()
+            return JSONResponse(
+                status_code=503,
+                content={"status": "unavailable", "detail": f"Solar 호출 실패: {exc}"},
+            )
+        parsed = _parse_eligibility_result(raw)
+        final = True
+    else:
+        try:
+            messages = build_chat_messages(notice_text, user_profile, history=history)
+            raw = call_solar(messages)
+        except RuntimeError as exc:
+            conn.close()
+            return JSONResponse(
+                status_code=503,
+                content={"status": "unavailable", "detail": str(exc)},
+            )
+        except Exception as exc:
+            conn.close()
+            return JSONResponse(
+                status_code=503,
+                content={"status": "unavailable", "detail": f"Solar 호출 실패: {exc}"},
+            )
+        parsed = _parse_eligibility_result(raw)
+        final = is_final_judgment(raw)
+        question_text = extract_question(raw) if not final else None
 
     if final:
         role = "assistant"
         content = raw
     else:
         role = "assistant"
-        content = question_text or raw
+        content = raw
 
     message_id = str(uuid.uuid4())
     cursor.execute(
@@ -1363,6 +1824,8 @@ async def send_chat_message(request: Request, data: ChatMessageCreate):
             "summary": summary_text,
             "details": details,
             "notice_id": session_row["notice_id"],
+            "rank": parsed.get("rank"),
+            "applicant_type": parsed.get("applicant_type"),
         }
 
     conn.commit()
@@ -1442,8 +1905,8 @@ async def check_eligibility(request: Request, data: dict):
     }
 
     try:
-        prompt = build_check_prompt(notice_text, user_profile)
-        raw = call_solar(prompt)
+        messages = build_chat_messages(notice_text, user_profile)
+        raw = call_solar(messages)
     except RuntimeError as exc:
         # 키 미설정 등 호출 준비 문제
         return JSONResponse(
@@ -1522,6 +1985,7 @@ async def check_eligibility(request: Request, data: dict):
         "summary": summary_text,
         "details": details,
         "notice_id": notice_id,
+        "rank": parsed.get("rank"),
     }
 
 
@@ -1529,3 +1993,5 @@ async def check_eligibility(request: Request, data: dict):
 async def health_check():
     """Health check 엔드포인트"""
     return {"status": "ok", "service": "청년주택 적격성 워크스페이스"}
+
+

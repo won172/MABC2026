@@ -1,6 +1,9 @@
 'use client';
 
 import { useState, useEffect, useRef, type KeyboardEvent } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
 
 const base =
   (process.env.NEXT_PUBLIC_API_BASE_URL as string) || "http://localhost:8080";
@@ -10,6 +13,154 @@ type Role = "user" | "assistant";
 interface ChatMessage {
   role: Role;
   content: string;
+  parsedQuestion?: ParsedQuestion;
+  isFinal?: boolean;
+}
+
+type QuestionType = 'text' | 'date' | 'region' | 'radio';
+
+interface ParsedQuestion {
+  type: QuestionType;
+  label: string;
+  options?: string[];
+}
+
+function parseQuestionFromContent(content: string): ParsedQuestion | undefined {
+  if (content.includes('생년월일')) {
+    return { type: 'date', label: '생년월일' };
+  }
+  if (content.includes('거주 기간') || content.includes('거주기간')) {
+    return { type: 'text', label: '거주 기간' };
+  }
+  if (content.includes('거주 지역') || content.includes('거주지역')) {
+    return { type: 'region', label: '거주 지역' };
+  }
+  if (content.includes('무주택')) {
+    return {
+      type: 'radio',
+      label: '무주택 여부',
+      options: ['무주택이에요', '주택이 있어요', '아직 모르겠어요'],
+    };
+  }
+  if (content.includes('혼인')) {
+    return {
+      type: 'radio',
+      label: '혼인 여부',
+      options: ['미혼이에요', '기혼이에요', '아직 모르겠어요'],
+    };
+  }
+  if (content.includes('자산')) {
+    return { type: 'text', label: '총자산' };
+  }
+  if (content.includes('자동차') || content.includes('차량')) {
+    return { type: 'text', label: '자동차 가액' };
+  }
+  if (content.includes('소득')) {
+    return { type: 'text', label: '월평균 소득' };
+  }
+  return undefined;
+}
+
+function InlineAnswerField({
+  msgIdx,
+  question,
+  value: _value,
+  onChange,
+  onSubmit,
+  loading,
+  disabled,
+  submitted,
+}: {
+  msgIdx: number;
+  question: ParsedQuestion;
+  value: string;
+  onChange: (v: string) => void;
+  onSubmit: (value: string) => void;
+  loading: boolean;
+  disabled: boolean;
+  submitted: boolean;
+}) {
+  const [localValue, setLocalValue] = useState(_value);
+
+  useEffect(() => {
+    setLocalValue(_value);
+  }, [_value]);
+
+  if (question.type === 'radio' && question.options) {
+    return (
+      <div className="mt-3 pt-3 border-t border-zinc-200">
+        <p className="text-xs font-medium text-zinc-500 mb-2">{question.label}</p>
+        <div className="flex flex-wrap gap-2">
+          {question.options.map((opt) => {
+            const selected = localValue === opt;
+            return (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => {
+                  setLocalValue(opt);
+                  onChange(opt);
+                  onSubmit(opt);
+                }}
+                disabled={loading || disabled || submitted}
+                className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
+                  selected
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                    : 'bg-white border-zinc-200 text-zinc-700 hover:border-zinc-300'
+                } ${submitted ? 'opacity-70' : ''}`}
+              >
+                {opt}
+              </button>
+            );
+          })}
+        </div>
+        {submitted && (
+          <p className="mt-1.5 text-xs text-emerald-700">제출됨</p>
+        )}
+      </div>
+    );
+  }
+
+  const isDate = question.type === 'date';
+  return (
+    <div className="mt-3 pt-3 border-t border-zinc-200">
+      <p className="text-xs font-medium text-zinc-500 mb-1.5">{question.label}</p>
+      <div className="flex gap-2">
+        <input
+          type={isDate ? 'date' : 'text'}
+          value={localValue}
+          onChange={(e) => setLocalValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              onSubmit(localValue);
+            }
+          }}
+          disabled={loading || disabled || submitted}
+          className="flex-1 rounded-lg border border-zinc-200 bg-white px-2 py-1.5 text-sm focus:border-primary focus:ring-1 focus:ring-primary disabled:opacity-50"
+          placeholder={
+            isDate
+              ? ''
+              : question.label === '월평균 소득'
+                ? '예: 월 250만원'
+                : question.label === '총자산'
+                  ? '예: 모름 또는 3,000만원'
+                  : question.label === '자동차 가액'
+                    ? '예: 없음 또는 1,500만원'
+                    : '예: 1997-04-01'
+          }
+        />
+        <button
+          type="button"
+          onClick={() => onSubmit(localValue)}
+          disabled={loading || disabled || !localValue.trim() || submitted}
+          className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-sm text-on-primary disabled:opacity-50 disabled:pointer-events-none"
+        >
+          {loading ? '전송 중…' : submitted ? '제출됨' : '제출'}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 interface DetailRow {
@@ -25,6 +176,9 @@ interface CheckResult {
   summary: string | null;
   details: DetailRow[];
   notice_id: string | null;
+  rank?: string | null;
+  applicant_type?: string | null;
+  pre_check?: string | null;
   raw?: string;
 }
 
@@ -35,6 +189,9 @@ interface SessionResponse {
   is_final: boolean;
   result?: string | null;
   summary?: string | null;
+  rank?: string | null;
+  applicant_type?: string | null;
+  pre_check?: string | null;
   details?: DetailRow[];
   notice_id?: string | null;
   status?: number;
@@ -42,9 +199,9 @@ interface SessionResponse {
 }
 
 function labelText(label: string | null | undefined) {
-  if (label === "eligible") return "🟢 신청 가능";
-  if (label === "ineligible") return "🔴 신청 불가";
-  if (label === "needs_review") return "🟡 추가 확인 필요";
+  if (label === "eligible") return "신청 가능";
+  if (label === "ineligible") return "신청 불가";
+  if (label === "needs_review") return "추가 확인 필요";
   return label ?? "판정 없음";
 }
 
@@ -64,16 +221,54 @@ function verdictClass(v: string | null | undefined) {
 }
 
 function verdictLabel(v: string | null | undefined) {
-  if (v === "met") return "⭕ 충족";
-  if (v === "not_met") return "❌ 미충족";
-  if (v === "needs_review") return "⚠️ 확인 필요";
+  if (v === "met") return "충족";
+  if (v === "not_met") return "미충족";
+  if (v === "needs_review") return "확인 필요";
   if (v === "unverified") return "확인 불가";
   return "미확인";
 }
 
-function formatNoticeMeta(text: string) {
-  const lines = text.split("\n").filter(Boolean);
-  return lines[0]?.trim() || "공고 텍스트 분석 결과";
+function isMarkdownTableRow(line: string): boolean {
+  const t = line.trim();
+  if (!t.startsWith("|") || !t.endsWith("|")) return false;
+  // 구분선(예: |---|---|)은 표 행으로 치지 않음
+  if (/^\|[\s\-:|]+\|$/.test(t)) return false;
+  return true;
+}
+
+/** 채팅패널에서 빈 줄이 많아지는 것을 줄이기 위한 응답 텍스트 압축 */
+function formatChatContent(raw: string): string {
+  const lines = raw.split("\n");
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (isMarkdownTableRow(line)) {
+      // 연속된 표 행을 한 번에 처리
+      const tableRows: string[] = [];
+      while (i < lines.length && isMarkdownTableRow(lines[i])) {
+        tableRows.push(lines[i]);
+        i++;
+      }
+      // 각 행을 셀 단위로 바꿔 출력 (표 구분선 제외는 isMarkdownTableRow에서 이미 걸러짐)
+      for (const row of tableRows) {
+        const trimmed = row.trim();
+        const inner = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
+        const inner2 = inner.endsWith("|") ? inner.slice(0, -1) : inner;
+        const cells = inner2.split("|").map((c) => c.trim());
+        out.push(cells.join(" | "));
+      }
+      continue;
+    }
+    out.push(line);
+    i++;
+  }
+  let text = out.join("\n");
+  // 연속 빈 줄 3개 이상 → 2개로 압축 (탭/공백만 있는 줄도 빈 줄로 취급)
+  text = text.replace(/\n[ \t]*\n[ \t]*\n[ \t]*(?=\n|$)/g, "\n\n");
+  // 양끝 정리
+  text = text.trim();
+  return text;
 }
 
 export default function CheckPage() {
@@ -95,6 +290,7 @@ export default function CheckPage() {
   const [profError, setProfError] = useState<string | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
   const [expandedMsg, setExpandedMsg] = useState<Set<number>>(new Set());
+  const [inlineAnswers, setInlineAnswers] = useState<Map<number, string>>(new Map());
   const toggleMsg = (idx: number) =>
     setExpandedMsg((prev) => {
       const next = new Set(prev);
@@ -102,6 +298,34 @@ export default function CheckPage() {
       else next.add(idx);
       return next;
     });
+  const toggleInlineAnswer = (msgIdx: number, value: string) =>
+    setInlineAnswers((prev) => new Map(prev).set(msgIdx, value));
+  const [inlineSubmitted, setInlineSubmitted] = useState<Set<number>>(new Set());
+  const fieldKeyForQuestion = (q: ParsedQuestion | undefined): string | null => {
+    if (!q) return null;
+    if (q.type === 'date') return 'dob';
+    if (q.type === 'region') return 'region';
+    if (q.type === 'radio') {
+      // 질문 라벨로 무주택/혼인 구분
+      if (q.label.includes('무주택')) return 'housing_status';
+      if (q.label.includes('혼인')) return 'marital_status';
+      return null;
+    }
+    if (q.label.includes('거주 기간') || q.label.includes('거주기간')) return 'residence_duration';
+    if (q.label.includes('총자산')) return 'asset_info';
+    if (q.label.includes('자동차') || q.label.includes('차량')) return 'car_value';
+    if (q.label.includes('소득')) return 'income_info';
+    return null;
+  };
+  const inlineSubmit = (msgIdx: number, answer: string) => {
+    if (!answer?.trim() || !sessionId || loading) return;
+    setInlineSubmitted((prev) => new Set(prev).add(msgIdx));
+    const q = messages[msgIdx]?.parsedQuestion;
+    const fk = fieldKeyForQuestion(q);
+    sendMessage(answer.trim(), fk);
+  };
+  const [noticeExpanded, setNoticeExpanded] = useState(false);
+  const toggleNotice = () => setNoticeExpanded((prev) => !prev);
   const io = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -146,23 +370,21 @@ export default function CheckPage() {
       return;
     }
 
-    // 프로필이 아직 로드되지 않았으면 로딩이 끝날 때까지 기다린다.
-    // 이미 로딩 중이면 응답을 기다리고, 로딩이 끝났으면 즉시 사용한다.
-    // setProfile은 비동기 상태 업데이트이므로, 방금 가져온 데이터를 로컬 변수에
-    // 함께 담아두어야 이후 요청 본문에 반영할 수 있다.
-    let activeProfile: Record<string, string | null> | null = profile;
-    if (profileLoading) {
-      try {
-        const r = await fetch(`${base}/api/onboarding/progress`, {
-          credentials: "include",
-          headers: { Accept: "application/json" },
-        });
-        const data = await r.json();
-        setProfile(data);
-        activeProfile = data;
-      } catch {
-        setProfError("프로필을 불러오지 못했습니다.");
-      }
+    // 프로필은 항상 최신 값을 가져와 activeProfile로 쓴다.
+    // 채팅 답변으로 DB가 갱신돼도 이 페이지의 profile state는 초기에는 확정적이지 않고,
+    // 확정 이후에도 채팅을 통한 갱신을 자동으로 반영하지 않기 때문이다.
+    // 따라서 startSession 직전 DB 최신값을 fetch하고, 받아온 값으로 local state도 함께 갱신한다.
+    let activeProfile: Record<string, string | null> | null = null;
+    try {
+      const r = await fetch(`${base}/api/onboarding/progress`, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      const data = await r.json();
+      setProfile(data);
+      activeProfile = data as Record<string, string | null>;
+    } catch {
+      setProfError("프로필을 불러오지 못했습니다.");
     }
 
     const submittedText = notice.trim();
@@ -236,14 +458,26 @@ export default function CheckPage() {
         };
         setResult(checked);
 
-        const assistantText = [labelText(checked.result)];
-        if (checked.summary) {
-          assistantText.push(checked.summary.replace(/\*\*/g, '').trim());
-        }
-        setMessages((m) => [...m, { role: "assistant", content: assistantText.join("\n") }]);
-
         setSessionId(null);
-        setMessages((m) => [...m, { role: "assistant", content: (data.content ?? "").replace(/\*\*/g, '') }]);
+        setMessages((m) => [
+          ...m,
+          {
+            role: "assistant",
+            content: data.content ?? "",
+            parsedQuestion: parseQuestionFromContent(data.content ?? ""),
+            isFinal: true,
+          },
+        ]);
+        setNoticePlaceholder("Solar의 질문에 답하고 Ctrl+Enter로 보내세요.");
+      } else {
+        setMessages((m) => [
+          ...m,
+          {
+            role: "assistant",
+            content: data.content ?? "",
+            parsedQuestion: parseQuestionFromContent(data.content ?? ""),
+          },
+        ]);
         setNoticePlaceholder("Solar의 질문에 답하고 Ctrl+Enter로 보내세요.");
       }
     } catch {
@@ -257,7 +491,7 @@ export default function CheckPage() {
     }
   };
 
-  const sendMessage = async (text: string) => {
+  const sendMessage = async (text: string, fieldKey: string | null = null) => {
     setLoading(true);
     setError(null);
     setSolarUnavailable(false);
@@ -281,7 +515,7 @@ export default function CheckPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, content: text }),
+        body: JSON.stringify({ session_id: sessionId, content: text, field_key: fieldKey ?? null }),
       });
 
       const data: SessionResponse = await res.json();
@@ -329,14 +563,25 @@ export default function CheckPage() {
         };
         setResult(checked);
 
-        const assistantText = [labelText(checked.result)];
-        if (checked.summary) {
-          assistantText.push(checked.summary.replace(/\*\*/g, '').trim());
-        }
-        setMessages((m) => [...m, { role: "assistant", content: assistantText.join("\n") }]);
+        setMessages((m) => [
+          ...m,
+          {
+            role: "assistant",
+            content: data.content ?? "",
+            parsedQuestion: parseQuestionFromContent(data.content ?? ""),
+            isFinal: true,
+          },
+        ]);
         setSessionId(null);
       } else {
-        setMessages((m) => [...m, { role: "assistant", content: (data.content ?? "").replace(/\*\*/g, '') }]);
+        setMessages((m) => [
+          ...m,
+          {
+            role: "assistant",
+            content: data.content ?? "",
+            parsedQuestion: parseQuestionFromContent(data.content ?? ""),
+          },
+        ]);
         setNoticePlaceholder("Solar의 질문에 답하고 Ctrl+Enter로 보내세요.");
       }
     } catch {
@@ -453,7 +698,11 @@ export default function CheckPage() {
 
   const submitText = () => {
     const v = notice.trim();
-    if (!v) return;
+    if (!v) {
+      // 채팅패널 내에서 인라인 답변 입력이 비어있는 경우도 처리 opportunities가 있지만,
+      // 여기서는 전역 textarea가 비어있으면 submit을 하지 않는다.
+      return;
+    }
     if (sessionId) {
       sendMessage(v);
       setNotice("");
@@ -476,7 +725,7 @@ export default function CheckPage() {
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       submitText();
     }
@@ -499,9 +748,13 @@ export default function CheckPage() {
           ].map(([k, label]) => (
             <li key={k} className="flex justify-between gap-3">
               <span className="text-zinc-500">{label}</span>
-              <span className="font-mono text-zinc-800">
-                {profile[k] ? String(profile[k]) : "미제공"}
-              </span>
+              {profile[k] ? (
+                <span className="font-mono text-zinc-800">{String(profile[k])}</span>
+              ) : (
+                <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 border border-amber-200">
+                  미제공
+                </span>
+              )}
             </li>
           ))}
         </ul>
@@ -516,15 +769,22 @@ export default function CheckPage() {
 
 
   return (
-    <div className="flex flex-col min-h-screen bg-[var(--background)]">
+    <div className="flex flex-col h-screen overflow-hidden bg-[var(--background)]">
       <header className="border-b border-[var(--border)] bg-[var(--surface)] px-5 py-4">
         <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-lg font-semibold text-[var(--text-primary)]">청년주택 적격성 체크</h1>
-            <p className="mt-1 text-sm text-[var(--text-secondary)]">
-              공고 내용을 붙여넣고 보내면 Solar가 신청 가능 여부를 분석해드려요.
-              정보가 부족하면 하나씩 물어봐요.
-            </p>
+          <div className="flex items-center gap-3">
+            <img
+              src="/logo.png"
+              alt="청년주택 적격성 워크스페이스"
+              className="h-20 w-auto"
+            />
+            <div>
+              <h1 className="text-lg font-semibold text-[var(--text-primary)]">청년주택 적격성 체크</h1>
+              <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                공고 내용을 붙여넣고 보내면 Solar가 신청 가능 여부를 분석해드려요.
+                정보가 부족하면 하나씩 물어봐요.
+              </p>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             {result && (
@@ -547,8 +807,8 @@ export default function CheckPage() {
       </header>
 
       <div className="flex flex-1 min-h-0">
-        <aside className="flex flex-col w-[40%] border-r border-[var(--border)] bg-[var(--surface)]">
-          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+        <aside className="flex flex-col flex-1 w-[65%] shrink-0 border-r border-[var(--border)] bg-[var(--surface)] pb-10">
+          <div className="flex flex-col flex-1 overflow-y-auto px-5 py-4 space-y-4">
             {messages.length === 0 && (
               <div className="rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--surface-subtle)] px-5 py-8 text-center text-sm text-[var(--text-secondary)]">
                 공고 내용을 여기에 붙여넣거나 파일을 올려 주세요.
@@ -557,33 +817,76 @@ export default function CheckPage() {
 
             {messages.map((m, i) => {
               const lines = m.content.split('\n');
-              const isLong = m.role === 'assistant' && lines.length >= 5;
+              const isLong = lines.length >= 9;
+              const isAssistantQuestion =
+                m.role === 'assistant' && m.parsedQuestion && !m.isFinal;
               return (
-                <div
-                  key={i}
-                  className={`max-w-[62%] rounded-md p-3 ${
-                    m.role === "user"
-                      ? "ml-auto bg-[var(--primary)] text-white rounded-br-[6px]"
-                      : "mr-auto bg-[var(--surface-subtle)] text-[var(--text-primary)] border border-[var(--border)] rounded-bl-[6px]"
-                  }`}
-                >
-                  <div className={isLong && !expandedMsg.has(i) ? 'line-clamp-4' : ''}>
-                    {lines.map((line, j) => (
-                      <p key={j} className="whitespace-pre-wrap text-sm leading-relaxed">
-                        {line}
-                      </p>
-                    ))}
+                m.role === "user" ? (
+                  <div
+                    key={i}
+                    className="ml-auto max-w-[80%] rounded-2xl bg-[var(--primary)] p-3 text-white"
+                  >
+                    <div className={isLong && !expandedMsg.has(i) ? 'line-clamp-4' : ''}>
+                      {lines.map((line, j) => (
+                        <p key={j} className="whitespace-pre-wrap text-sm leading-relaxed">
+                          {line}
+                        </p>
+                      ))}
+                    </div>
+                    {isLong && (
+                      <button
+                        type="button"
+                        onClick={() => toggleMsg(i)}
+                        className="mt-2 text-xs text-white/70 hover:text-white"
+                      >
+                        {expandedMsg.has(i) ? '접기' : '펼쳐보기'}
+                      </button>
+                    )}
                   </div>
-                  {isLong && (
-                    <button
-                      type="button"
-                      onClick={() => toggleMsg(i)}
-                      className="mt-2 text-xs text-zinc-500 hover:text-zinc-800"
-                    >
-                      {expandedMsg.has(i) ? '접기' : '펼쳐보기'}
-                    </button>
-                  )}
-                </div>
+                ) : (
+                  <div
+                    key={i}
+                    className="max-w-[80%] rounded-2xl bg-zinc-100 border border-zinc-200 p-3"
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <img
+                        src="/Upstage_Logo_Purple.svg.webp"
+                        alt="Solar"
+                        className="h-8 w-auto select-none"
+                      />
+                      <span className="text-xs font-medium text-zinc-500">Solar</span>
+                    </div>
+                    <div className={isLong && !expandedMsg.has(i) ? 'line-clamp-4' : ''}>
+                      <div className="markdown-body text-sm leading-relaxed text-zinc-900">
+                        <ReactMarkdown remarkPlugins={[[remarkGfm, { singleTilde: false }]]} rehypePlugins={[rehypeRaw]}>
+                          {m.content}
+                        </ReactMarkdown>
+                      </div>
+                    </div>
+                    {isLong && (
+                      <button
+                        type="button"
+                        onClick={() => toggleMsg(i)}
+                        className="mt-2 text-xs text-zinc-500 hover:text-zinc-800"
+                      >
+                        {expandedMsg.has(i) ? '접기' : '펼쳐보기'}
+                      </button>
+                    )}
+                    {isAssistantQuestion && m.parsedQuestion && (
+                      <InlineAnswerField
+                        key={`inline-${i}`}
+                        msgIdx={i}
+                        question={m.parsedQuestion}
+                        value={inlineAnswers.get(i) ?? ''}
+                        onChange={(v) => toggleInlineAnswer(i, v)}
+                        onSubmit={(v) => inlineSubmit(i, v)}
+                        loading={loading}
+                        disabled={!sessionId || loading}
+                        submitted={inlineSubmitted.has(i)}
+                      />
+                    )}
+                  </div>
+                )
               );
             })}
 
@@ -606,17 +909,12 @@ export default function CheckPage() {
             <div id="chat-end" />
           </div>
 
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              submitText();
-            }}
-            className="border-t border-[var(--border)] p-4"
-          >
-            <div className="flex items-center gap-3 mb-2">
+          <div className="border-t border-[var(--border)] p-3 sticky bottom-3" style={{ backgroundColor: 'var(--surface)' }}>
+            <div className="flex max-w-[620px] items-center gap-2 rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 shadow-sm mx-auto w-full">
+              {/* 왼쪽: 클립 아이콘 버튼 (첨부파일) */}
               <input
                 type="file"
-                id="notice-file-input"
+                id="chat-file-input"
                 accept=".pdf,.hwp,.hwpz,.pages,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.html,.htm,.md,.rtf,.png,.jpg,.jpeg,.gif,.webp"
                 className="hidden"
                 onChange={handleFileChange}
@@ -624,76 +922,79 @@ export default function CheckPage() {
               />
               <button
                 type="button"
-                onClick={() => document.getElementById('notice-file-input')?.click()}
+                onClick={() => document.getElementById('chat-file-input')?.click()}
                 disabled={loading || parsingFile}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] shadow-sm hover:bg-[var(--surface-subtle)] disabled:opacity-50"
+                className="shrink-0 flex h-9 w-9 items-center justify-center rounded-full border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-subtle)] hover:text-[var(--text-primary)] disabled:opacity-40"
+                title="공고 파일 첨부"
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"/>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M14.5 2H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
                   <path d="M14 2v6h6"/>
+                  <path d="M10 14 7 17l-1 1"/>
+                  <path d="M14 14 17 17l1 1"/>
                 </svg>
-                {parsingFile ? "첨부 파싱 중..." : "공고 첨부"}
               </button>
+
+              {/* 가운데: 입력칸 */}
+              <textarea
+                ref={io}
+                value={notice}
+                onChange={handleChange}
+                onKeyDown={handleKeyDown}
+                placeholder="공고 내용을 입력하세요. Enter로 전송, Shift+Enter로 줄바꿈."
+                disabled={loading}
+                className="flex-1 min-h-[24px] max-h-[200px] resize-none rounded-xl border-0 bg-transparent px-2 py-1.5 text-sm focus:outline-none text-[var(--text-primary)] placeholder:text-[var(--text-muted)] disabled:opacity-50"
+                rows={1}
+              />
+
+              {/* 첨부 파일명 뱃지 */}
               {attachedFileName && (
-                <span className="inline-flex items-center gap-1 rounded-md bg-[var(--surface-subtle)] px-2 py-1 text-xs text-[var(--text-muted)]">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"/>
-                    <path d="M14 2v6h6"/>
-                  </svg>
+                <span className="shrink-0 rounded-lg bg-sky-100 px-2 py-1 text-xs text-sky-800 truncate max-w-[140px]">
                   {attachedFileName}
                 </span>
               )}
+
+              {/* 파일 파싱 에러 뱃지 */}
               {fileParseError && (
-                <span className="inline-flex items-center gap-1 rounded-md bg-[var(--ineligible-bg)] px-2 py-1 text-xs text-[var(--ineligible)]">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="10"/>
-                    <path d="M12 8v4M12 16h0"/>
-                  </svg>
+                <span className="shrink-0 rounded-lg bg-red-100 px-2 py-1 text-xs text-red-800 truncate max-w-[140px]">
                   {fileParseError}
                 </span>
               )}
-              <button
-                type="button"
-                onClick={() => setNoticePlaceholder('공고 내용을 여기에 붙여넣으세요. (Ctrl+Enter로 전송)')}
-                disabled={loading}
-                className="ml-auto inline-flex items-center gap-1 rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1.5 text-xs font-medium text-[var(--text-muted)] hover:bg-[var(--surface-subtle)] disabled:opacity-50"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"/>
-                  <path d="M16 10h4M16 14h4M4 6h16M4 12h12M4 18h16"/>
-                </svg>
-                텍스트로 붙여넣기
-              </button>
-            </div>
-            <textarea
-              ref={io}
-              value={notice}
-              onChange={handleChange}
-              className="w-full min-h-[96px] resize-y rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] px-4 py-3 text-sm shadow-sm focus:border-[var(--focus)] focus:outline-none focus:ring-1 focus:ring-[var(--focus)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
-              placeholder={noticePlaceholder}
-              onKeyDown={handleKeyDown}
-              disabled={loading}
-            />
-            <div className="mt-2 flex justify-end">
+
+              {/* 오른쪽: 전송 버튼 */}
               <button
                 type="submit"
                 disabled={loading || profileLoading || !notice.trim()}
-                className="rounded-lg bg-[var(--primary)] px-5 py-2 text-sm font-medium text-[var(--on-primary)] shadow-sm transition-colors hover:bg-[var(--primary-hover)] disabled:opacity-50"
+                className="shrink-0 rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--on-primary)] shadow-sm transition-colors hover:bg-[var(--primary-hover)] active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none"
               >
-                {loading ? "응답 대기 중..." : sessionId ? "답변 보내기" : "전송 및 분석"}
+                {loading ? (
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                  </svg>
+                ) : (
+                  sessionId ? (
+                    <svg className="mr-1 inline h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                    </svg>
+                  ) : (
+                    <svg className="mr-1 inline h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                    </svg>
+                  )
+                )}
+                {loading ? "응답 대기..." : sessionId ? "답장" : "전송"}
               </button>
             </div>
-          </form>
+
+            {/* 파싱 중 안내 */}
+            {parsingFile && (
+              <p className="mt-1.5 text-xs text-center text-[var(--text-muted)]">공고 파일을 파싱하는 중입니다…</p>
+            )}
+          </div>
         </aside>
 
-        <main className="flex flex-col w-[60%] border-l border-[var(--border)] bg-[var(--background)]">
-          <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
-            {!submittedNotice.trim() && !result && (
-              <div className="rounded-xl border border-dashed border-[var(--border-strong)] bg-[var(--surface)] px-5 py-8 text-center text-sm text-[var(--text-secondary)]">
-                먼저 공고를 올려 주세요. 왼쪽 채팅창에 공고 내용을 붙여넣거나 파일을 올리면, 오른쪽에 공고 정보와 판정 결과가 표시됩니다.
-              </div>
-            )}
-
+        <main className="flex flex-col flex-1 w-[35%] min-h-0 border-l border-[var(--border)] bg-[var(--background)] overflow-y-auto">
+          <div className="px-5 py-5 space-y-5">
             {submittedNotice.trim() && (
               <>
                 {/* 1. 공고 헤더 카드 */}
@@ -701,25 +1002,58 @@ export default function CheckPage() {
                   <div className="flex items-center justify-between">
                     <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">현재 공고</h2>
                   </div>
-                  <div className="space-y-2">
-                    <h3 className="text-lg font-semibold text-[var(--text-primary)] leading-snug">
-                      {submittedNotice.slice(0, 80)}{submittedNotice.length > 80 ? '…' : ''}
-                    </h3>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--text-muted)]">
-                      <span>입력 방식: 직접 입력</span>
-                      <span>글자 수: {submittedNotice.length}자</span>
-                    </div>
+                  <h3 className="text-lg font-semibold text-[var(--text-primary)] leading-snug">
+                    {submittedNotice.slice(0, 80)}{submittedNotice.length > 80 ? '…' : ''}
+                  </h3>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--text-muted)]">
+                    <span>입력 방식: {attachedFileName ? `파일 첨부 (${attachedFileName})` : '직접 입력'}</span>
+                    <span>글자 수: {submittedNotice.length}자</span>
                   </div>
-                  <div className="rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--surface-subtle)] p-3 text-xs text-[var(--text-muted)]">
-                    분석을 시작하면 여기에 공고의 핵심 정보(공고명, 모집기관, 신청기간, 문의처 등)가 표시됩니다.
+
+                  {/* 공고 전문 (접기/펼치기) */}
+                  <div className="rounded-xl border border-sky-200 bg-sky-50 p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-sky-800">공고 전문</span>
+                      {attachedFileName && (
+                        <span className="text-xs text-sky-700">
+                          — {attachedFileName}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-2">
+                      {(() => {
+                        const lines = submittedNotice.split('\n');
+                        const isLong = lines.length >= 9;
+                        return (
+                          <>
+                            <div className={isLong && !noticeExpanded ? 'line-clamp-4' : ''}>
+                              {lines.map((line, j) => (
+                                <p key={j} className="whitespace-pre-wrap text-sm leading-relaxed text-sky-900">
+                                  {line}
+                                </p>
+                              ))}
+                            </div>
+                            {isLong && (
+                              <button
+                                type="button"
+                                onClick={() => toggleNotice()}
+                                className="mt-2 text-xs text-sky-700 hover:text-sky-900"
+                              >
+                                {noticeExpanded ? '접기' : '펼쳐보기'}
+                              </button>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
                   </div>
                 </section>
 
-                {/* 3. 내 정보 대조 미리보기 카드 (profile 있을 때) */}
+                {/* 3. 내 정보 격자 (온보딩 저장) — 타일 방식 */}
                 {profile && (
-                  <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-sm p-5 space-y-3">
+                  <section className="myinfo-section">
                     <div className="flex items-center justify-between">
-                      <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">내 정보 (온보딩 저장)</h2>
+                      <h2 className="myinfo-section-title">내 정보 (온보딩 저장)</h2>
                       <button
                         type="button"
                         onClick={() => window.location.href = "/onboarding"}
@@ -728,69 +1062,43 @@ export default function CheckPage() {
                         수정하기
                       </button>
                     </div>
-                    <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                      {profile.dob && (
-                        <>
-                          <dt className="text-[var(--text-muted)]">생년월일</dt>
-                          <dd className="text-[var(--text-primary)]">{profile.dob}</dd>
-                        </>
-                      )}
-                      {profile.region && (
-                        <>
-                          <dt className="text-[var(--text-muted)]">거주 지역</dt>
-                          <dd className="text-[var(--text-primary)]">{profile.region}</dd>
-                        </>
-                      )}
-                      {profile.residence_duration && (
-                        <>
-                          <dt className="text-[var(--text-muted)]">거주 기간</dt>
-                          <dd className="text-[var(--text-primary)]">{profile.residence_duration}</dd>
-                        </>
-                      )}
-                      {profile.housing_status && (
-                        <>
-                          <dt className="text-[var(--text-muted)]">무주택 여부</dt>
-                          <dd className="text-[var(--text-primary)]">{profile.housing_status}</dd>
-                        </>
-                      )}
-                      {profile.marital_status && (
-                        <>
-                          <dt className="text-[var(--text-muted)]">혼인 여부</dt>
-                          <dd className="text-[var(--text-primary)]">{profile.marital_status}</dd>
-                        </>
-                      )}
-                      {profile.income_info && (
-                        <>
-                          <dt className="text-[var(--text-muted)]">소득 정보</dt>
-                          <dd className="text-[var(--text-primary)]">{profile.income_info}</dd>
-                        </>
-                      )}
-                      {profile.asset_info && (
-                        <>
-                          <dt className="text-[var(--text-muted)]">자산 정보</dt>
-                          <dd className="text-[var(--text-primary)]">{profile.asset_info}</dd>
-                        </>
-                      )}
-                      {profile.car_value && (
-                        <>
-                          <dt className="text-[var(--text-muted)]">자동차 가액</dt>
-                          <dd className="text-[var(--text-primary)]">{profile.car_value}</dd>
-                        </>
-                      )}
-                    </dl>
-                    {!profile.dob && !profile.region && !profile.residence_duration && !profile.housing_status && !profile.marital_status && !profile.income_info && !profile.asset_info && !profile.car_value && (
-                      <p className="text-sm text-[var(--text-muted)]">
-                        아직 저장된 프로필 정보가 없어요.{' '}
-                        <button
-                          type="button"
-                          onClick={() => window.location.href = "/onboarding"}
-                          className="text-[var(--text-primary)] hover:text-[var(--text-primary)] underline underline-offset-2"
-                        >
-                          온보딩을 완료
-                        </button>
-                        해 주세요.
-                      </p>
-                    )}
+                    <div className="myinfo-grid">
+                      {([
+                        ["dob", "생년월일"],
+                        ["region", "현재 거주 지역"],
+                        ["residence_duration", "거주 기간"],
+                        ["housing_status", "무주택 여부"],
+                        ["marital_status", "혼인 여부"],
+                        ["income_info", "소득"],
+                        ["asset_info", "자산"],
+                        ["car_value", "자동차 가액"],
+                      ] as [string, string][]).map(([k, name]) => {
+                        const value = profile[k as keyof typeof profile];
+                        const isEmpty = !value || String(value).trim() === '';
+                        return (
+                          <div
+                            key={k}
+                            className={`myinfo-tile ${isEmpty ? 'no-value' : ''}`}
+                          >
+                            <div className="myinfo-tile-name">{name}</div>
+                            <div className="myinfo-tile-value">
+                              {value ? (
+                                <span>{String(value)}</span>
+                              ) : (
+                                <span className="myinfo-empty-badge">미입력</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <button className="myinfo-edit-btn" type="button" onClick={() => window.location.href = "/onboarding"}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" stroke="currentColor" strokeWidth="2"/>
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                        정보 수정하기
+                      </button>
+                    </div>
                   </section>
                 )}
               </>
@@ -804,102 +1112,111 @@ export default function CheckPage() {
 
             {result && (
               <>
-                <div className="flex justify-between items-center">
-                  <h2 className="text-lg font-semibold text-zinc-900">판정 완료</h2>
-                  <button
-                    type="button"
-                    onClick={resetCheck}
-                    className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-zinc-800"
-                  >
-                    새 공고 분석
-                  </button>
-                </div>
-
-                {/* 2. 자격조건 요약 카드 */}
-                <section className="rounded-xl border border-zinc-200 bg-white shadow-sm p-5 space-y-3">
+                {/* 결과 카드: 맨 위에 크게 하나만 */}
+                <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-sm p-5 space-y-4">
                   <div className="flex items-center justify-between">
-                    <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">자격조건 요약</h2>
-                    {result.details && result.details.length > 0 && (
-                      <span className="text-xs text-zinc-500">{result.details.length}개 조건</span>
+                    <h2 className="text-lg font-semibold text-[var(--text-primary)]">판정 완료</h2>
+                  </div>
+
+                  {/* 큰 판정 결과 카드 */}
+                  <div className={`rounded-xl border-2 p-5 ${badgeClass(result.result)}`}>
+                    <div className="text-xl font-semibold">
+                      {labelText(result.result)}
+                      {(result.rank || result.applicant_type) && (
+                        <>
+                          <span className="mx-2 text-zinc-400">|</span>
+                          <span className="font-normal text-zinc-700">
+                            {result.rank}
+                            {result.rank && result.applicant_type ? ' | ' : ''}
+                            {result.applicant_type}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                    {result.summary && (
+                      <p className="mt-2 text-sm leading-relaxed">
+                        {result.summary.replace(/\*\*/g, '')}
+                      </p>
                     )}
                   </div>
-                  {result.summary ? (
-                    <p className="text-sm text-zinc-600 leading-relaxed">
-                      {result.summary.replace(/\*\*/g, '').trim() || '요약 정보가 제공되지 않았습니다.'}
-                    </p>
-                  ) : (
-                    <p className="text-sm text-zinc-500">요약 정보가 제공되지 않았습니다.</p>
-                  )}
-                </section>
 
-                {/* 4. 판정 결과 카드 */}
-                <section className="rounded-xl border border-zinc-200 bg-white shadow-sm p-5 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">판정 결과</h2>
-                    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${badgeClass(result.result)}`}>
-                      {labelText(result.result)}
-                    </span>
-                  </div>
-
-                  <div className={`rounded-xl border p-5 ${badgeClass(result.result)}`}>
-                    <div className="text-lg font-semibold">{labelText(result.result)}</div>
-                    {result.summary && <p className="mt-2 text-zinc-800">{result.summary.replace(/\*\*/g, '')}</p>}
-                  </div>
-
-                  {/* 자격 조건 대조표 */}
+                  {/* 자격 조건 대조 — 3칸 격자 타일 */}
                   {result.details && result.details.length > 0 && (
                     <div className="space-y-3">
-                      <h3 className="text-sm font-semibold text-zinc-800">자격 조건 대조</h3>
-                      <div className="space-y-2">
-                        {result.details
-                          .filter(
-                            (d) =>
-                              result.result !== "eligible" || d.result !== "needs_review"
-                          )
-                          .map((d, i) => (
-                            <div key={i} className={`rounded-lg border p-3 ${verdictClass(d.result)}`}>
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="min-w-0">
-                                  <div className="font-medium text-zinc-900">{d.requirement_name}</div>
-                                  <div className="text-xs text-zinc-500 mt-0.5">{d.notice_criteria}</div>
+                      <h3 className="text-sm font-semibold text-[var(--text-primary)]">자격 조건 대조</h3>
+                      <div className="summary-line">
+                        {result.details.filter(d => d.result === 'met').length}개 충족 ·
+                        {result.details.filter(d => d.result === 'needs_review').length}개 확인 필요 ·
+                        {result.details.filter(d => d.result === 'not_met').length}개 미충족
+                      </div>
+                      <div className="requirement-grid">
+                        {result.details.map((d, i) => {
+                          return (
+                            <div
+                              key={i}
+                              className="requirement-tile"
+                              onClick={(e) => {
+                                e.currentTarget.classList.toggle('open');
+                              }}
+                            >
+                              <div className="requirement-tile-head">
+                                <div>
+                                  <div className="requirement-tile-name">{d.requirement_name}</div>
                                 </div>
-                                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium shrink-0 ${verdictClass(d.result)}`}>
-                                  {verdictLabel(d.result)}
-                                </span>
+                                <div className="requirement-tile-arrow">
+                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                                    <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                  </svg>
+                                </div>
                               </div>
-                              {d.user_info && (
-                                <div className="mt-1.5 text-xs text-zinc-600">
-                                  내 정보: {d.user_info}
+                              <div className={`requirement-tile-status ${d.result === 'met' ? 'met' : d.result === 'not_met' ? 'not-met' : 'needs-review'}`}>
+                                <span className="dot"></span>
+                                {verdictLabel(d.result)}
+                              </div>
+                              <div className="requirement-tile-myinfo">
+                                {d.user_info ? (
+                                  <strong>{d.user_info}</strong>
+                                ) : (
+                                  <span className="text-zinc-500">내 정보 없음</span>
+                                )}
+                              </div>
+                              <div className="requirement-tile-detail">
+                                <div className="requirement-tile-detail-inner">
+                                  <div className="label">공고 기준</div>
+                                  {d.notice_criteria}
+                                  {d.notes && d.notes !== '' && (
+                                    <div style={{ marginTop: '6px', color: 'var(--text-muted)' }}>
+                                      {d.notes}
+                                    </div>
+                                  )}
                                 </div>
-                              )}
+                              </div>
                             </div>
-                          ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}
 
                   {/* 신청 전 확인할 사항 */}
-                  <section className="rounded-xl border border-zinc-200 bg-white shadow-sm p-5 space-y-3">
-                    <div className="text-sm font-medium text-zinc-800">신청 전 확인할 사항</div>
-                    <ul className="text-sm text-zinc-600 space-y-1 list-disc marker:text-zinc-400">
-                      <li>공고 신청기간과 제출 방법을 시행기관 안내에서 다시 확인하세요.</li>
-                      <li>소득·자산·자동차 가액은 사용자가 직접 확인하는 값이 있을 수 있으니, 필요 시 증빙 서류를 준비하세요.</li>
-                      <li>이 판정은 공고문 근거로 한 1차 확인이며, 최종 입주자격은 시행기관의 심사를 통해 결정됩니다.</li>
-                    </ul>
+                  <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-sm p-5 space-y-3">
+                    <div className="text-sm font-medium text-[var(--text-primary)]">신청 전 확인할 사항</div>
+                    {result.pre_check ? (
+                      <div className="markdown-body text-sm text-[var(--text-secondary)] space-y-1">
+                        <ReactMarkdown remarkPlugins={[[remarkGfm, { singleTilde: false }]]} rehypePlugins={[rehypeRaw]}>
+                          {result.pre_check}
+                        </ReactMarkdown>
+                      </div>
+                    ) : (
+                      <ul className="text-sm text-[var(--text-secondary)] space-y-1 list-disc marker:text-[var(--text-muted)]">
+                        <li>공고 신청기간과 제출 방법을 시행기관 안내에서 다시 확인하세요.</li>
+                        <li>소득·자산·자동차 가액은 사용자가 직접 확인하는 값이 있을 수 있으니, 필요 시 증빙 서류를 준비하세요.</li>
+                        <li>이 판정은 공고문 근거로 한 1차 확인이며, 최종 입주자격은 시행기관의 심사를 통해 결정됩니다.</li>
+                      </ul>
+                    )}
                   </section>
 
-                  {result.raw && (
-                    <details className="rounded-xl border border-zinc-200 bg-white">
-                      <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-zinc-700">
-                        Solar 원본 응답 보기
-                      </summary>
-                      <pre className="mt-3 max-h-[420px] overflow-auto rounded-lg bg-zinc-50 p-4 text-xs leading-relaxed whitespace-pre-wrap">
-                        {result.raw}
-                      </pre>
-                    </details>
-                  )}
-
-                  <p className="text-xs text-zinc-500">
+                  <p className="text-xs text-[var(--text-muted)]">
                     이 판정은 공고문 근거로 한 1차 확인이며, 최종 입주자격은 시행기관의 심사를 통해
                     결정됩니다. 고정 응답 없이 Solar Pro4 응답을 그대로 파싱한 결과입니다.
                   </p>

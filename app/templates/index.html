@@ -147,6 +147,7 @@
                 <div class="judgment-title" id="judgment-title">판정 결과</div>
               </div>
               <div class="judgment-summary" id="judgment-summary"></div>
+              <div class="judgment-rank" id="judgment-rank" hidden></div>
               <div class="judgment-counts" id="judgment-counts"></div>
               <div class="section">
                 <div class="section-title">자격 조건 대조</div>
@@ -387,6 +388,16 @@
         badgeEl.className = 'badge ' + badgeClass;
         titleEl.textContent = resultLabelStr;
         summaryEl.innerHTML = data.summary ? escapeHtml(data.summary) : '판정이 완료되었습니다.';
+
+        var rankEl = $('#judgment-rank');
+        var showRank = data.rank && data.rank !== '순위 없음';
+        if (showRank) {
+          rankEl.hidden = false;
+          rankEl.innerHTML = '<div class="rank-label">나의 순위</div>' +
+                              '<div class="rank-value">' + escapeHtml(data.rank) + '</div>';
+        } else {
+          rankEl.hidden = true;
+        }
 
         var metCount = 0, needsReviewCount = 0, notMetCount = 0;
         if (data.details) {

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "청년주택 적격성 워크스페이스",
+  title: "Go집될집",
   description: "청년주택 모집공고의 신청 자격을 판정하는 서비스",
 };
 
